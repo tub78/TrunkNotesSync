@@ -71,7 +71,7 @@ How the sync works:
  - for each note from iPhone:
      * mark as NEW ON IPHONE if,
        * not in last sync list
-     * mark as UPDATE ON IPHONE if,
+     * mark as UPDATED ON IPHONE if,
        * in last sync list AND last modification date > last sync list
  - for each note locally:
      * mark as NEW LOCALLY if,
@@ -90,7 +90,7 @@ How the sync works:
 
 import sys
 import os
-import os.path
+import re
 import time
 import calendar
 import urllib
@@ -114,8 +114,18 @@ VALID_FILENAME_CHARS = "-_.() %s%s" % (string.ascii_letters, string.digits)
 
 logging.basicConfig(level=logging.DEBUG)
 
+
+
+class IphoneConnectError(Exception):
+    """
+    Raise if there is an issue connecting with Trunk Notes
+    running on the iPhone
+    """
+    pass
+
+
 class Note(object):
-    
+
     def __init__(self, name, last_modified, local_path=None):
         """
         @param name: Name of the note - e.g. HomePage
@@ -127,15 +137,20 @@ class Note(object):
         if not local_path:
             local_path = unicodedata.normalize('NFKD', unicode(name)).encode('ASCII', 'ignore')
             local_path = ''.join(c for c in local_path if c in VALID_FILENAME_CHARS) + '.txt'
+            assert os.path.exists(local_path), 'If local_path is provided it must exist'
         self.local_path = local_path
-        self.contents = None
-        self.file_contents = None
-        
+        self.contents = None       # note text content, utf8
+        self.file_contents = None  # binary (str) content of image/sound
+    
     def __cmp__(self, other_note):
         """
-        Notes are the same if they have the same name. TrunkSync is case insensitive
-        even though Trunk Notes is not
+        Notes are the same if they have the same name.
+        TrunkSync is case insensitive even though Trunk Notes is not
         """
+        # XXX: this could lead to loss of data if two notes on
+        # the iphone have titles differing only in case...?
+        # perhaps should use the .1.txt type thing locally and
+        # preserve case distinctions.
         return cmp(self.name.lower(), other_note.name.lower())
 
     def __repr__(self):
@@ -147,7 +162,7 @@ class Note(object):
 
         @param settings: Settings instance
         """
-        logging.debug('Getting note from device: %s' % (self.name, ))
+        logging.debug(u'Getting note from device: %s' % (self.name, ))
         self.contents = settings.iphone_request('get_note', {'title': self.name})
         if self.contents is None:
             return
@@ -197,25 +212,18 @@ class Note(object):
         if not self.local_path.startswith(settings.local_dir):
             self.local_path = os.path.join(settings.local_dir, self.local_path)
         logging.debug('Saving note to local: %s' % (self.local_path, ))
-        ## stu 100909 # replacing # utime = time.mktime(self.last_modified)
-        ## - macosx manpage for mktime() respects timezone set with tzset()
-        ## - but result is UTC (aka GMT)
-        ## - the following composition explicitly performs conversion to local time
-        #utime = time.mktime(time.localtime(calendar.timegm(self.last_modified)))
-        ## stu 110125 # fixed again (did the TN time format change after 100909?)
-        utime = calendar.timegm(self.last_modified)
-        ##
         f = open(self.local_path, 'w')
         f.write(self.contents)
         f.close()
         # Update last modified time on file to this notes last accessed time
+        utime = calendar.timegm(self.last_modified)
+        ## stu 110125 # fixed again (did the TN time format change after 100909?)
         self.update_time(utime)
         # If there is a related file, then save that as well
         if self.file_contents:
             file_path = os.path.join(settings.local_files_dir, self.name[5:])
-            f = open(file_path, 'wb')
-            f.write(self.file_contents)
-            f.close()
+            with open(file_path, 'wb') as f:
+                f.write(self.file_contents)
 
     def update_time(self, new_time):
         """
@@ -223,6 +231,7 @@ class Note(object):
 
         @param new_time: Timestamp
         """
+        assert self.local_path is not None, "local_path not established"
         os.utime(self.local_path, (new_time, new_time))
 
     def delete_local(self, settings):
@@ -251,22 +260,22 @@ class Note(object):
 
     def hydrate_from_local(self, settings):
         """
-        Get the note from the local file representing this note
+        Get the note from local
 
         @param settings: Settings instance
         """
         logging.debug('Getting note from local: %s, %s' % (self.name, self.local_path))
         self.contents = open(self.local_path, 'r').read()
         # Update the timestamp in the metadata
-        new_contents = ''
+        new_contents = []
         substituted_timestamp = False
-        for line in self.contents.split('\n'):
+        for line in self.contents.splitlines():
             if not substituted_timestamp and line.startswith('Timestamp: '):
                 # Substitute this line with the actual timestamp
                 line = 'Timestamp: %s' % (time.strftime('%Y-%m-%d %H:%M:%S +0000', self.last_modified), )
                 substituted_timestamp = True
-            new_contents += line + '\n'
-        self.contents = new_contents
+            new_contents.append(line + os.linesep)
+        self.contents = u''.join(new_contents)
 
     def save_to_iphone(self, settings):
         """
@@ -296,17 +305,6 @@ class Note(object):
         """
         logging.debug('Removing from device: %s' % (self.name, ))
         settings.iphone_request('remove_note', {'title': self.name})
-
-
-
-class IphoneConnectError(Exception):
-    """
-    Raise if there is an issue connecting with Trunk Notes
-    running on the iPhone
-    """
-    
-    pass
-
 
 
 class SyncSettings(object):
@@ -598,7 +596,7 @@ class TrunkSync(object):
         """
         raw_notes = self.settings.iphone_request('notes_list')
         notes = []
-        for note in raw_notes.split('\n'):
+        for note in raw_notes.splitlines():
             note = note.strip()
             if note:
                 timestamp, title = note.split(':', 1)
