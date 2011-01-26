@@ -86,6 +86,30 @@ How the sync works:
  - resolve conflicts where a note exists in more than one mark list (except can be in noth DELETE ON IPHONE and DELETED LOCALLY lists)
  - update according to lists (including trigger revision control actions)
  - save new last sync list
+
+2011-01-23
+UNICODE IN NOTES:
+all text within the notes (including the titles) is stored in UTF-8 format, and
+this is persisted across the computer(local) and device(remote) copies of the notes.
+However the filenames used to store notes on the local computer are restricted
+to ascii for portability purposes. Where multiple notes would map to a the same
+filename, a number is added prior to the .txt extension to distinguish the files.
+The note associated with a file should never be assumed purely from the filename,
+but from the note title given in the first few lines of each local file note.
+
+REQUIREMENTS:
+WinXP / 2000:
+  - install http://www.dns-sd.org/BonjourSDKSetup.zip
+    (via http://www.dns-sd.org/ClientSetup.html)
+Linux:
+  - libdnssd. Ubuntu package is 'libavahi-compat-libdnssd1'
+OS X:
+  - no further requirements on OS x 10.6
+  
+NOTE:
+It is important that your iOS device and local computer(s) are all time-synched
+to a reasonable degree, otherwise repeated quick edit/syncs switching between
+local/device for editing not keep the latest version accurately.
 """
 
 import sys
@@ -98,6 +122,11 @@ import unicodedata
 import string
 import select
 import logging
+import codecs
+import optparse
+import shlex
+import shutil
+import textwrap
 from getpass import getpass
 
 import pybonjour
@@ -119,12 +148,21 @@ logging.basicConfig(level=logging.DEBUG)
 # and use that
 settings = None
 
-
+MODE_CHECK_PRESENT  = 40001
+MODE_FIND_NOTE      = 40002
+MODE_FIND_OR_CREATE = 40003
+MODE_CREATE_NEW     = 40004
 
 class IphoneConnectError(Exception):
     """
     Raise if there is an issue connecting with Trunk Notes
     running on the iPhone
+    """
+    pass
+
+class SyncError(Exception):
+    """
+    Raise if there is an issue synchronising notes
     """
     pass
 
@@ -147,6 +185,133 @@ class Note(object):
         self.contents = None       # note text content, utf8
         self.file_contents = None  # binary (str) content of image/sound
     
+    def _filename_base(self):
+        """
+        @return: proposed filename base, with no path info or extension.
+        Note we currently return an ascii-compatible filename for portability
+        reasons.
+        Note file will always begin with the result of this function, but may
+        then contain .[unique_id] - where unique_id is a decimal integer.
+        """
+        norm_path = unicodedata.normalize('NFKD', self.name)
+        last_char_invalid = False
+        target_fname = []
+        for c in norm_path:
+            if c in VALID_FILENAME_CHARS:
+                target_fname.append(c)
+                last_char_invalid = False
+            else:
+                if not last_char_invalid:
+                    target_fname.append('_')
+                last_char_invalid = True
+        return ''.join(target_fname)
+
+    @staticmethod
+    def get_internal_title(note_path):
+        """
+        @param note_path: full path to a note file
+        @return: title of note form internal metadata, or None
+        """
+        note_name = None
+        with codecs.open(note_path, 'r', 'utf-8') as f:
+            for line in f:
+                if line.startswith('Title: '):
+                    note_name = line.split(':', 1)[1].strip()
+                    break
+        return note_name
+
+    def establish_local_path(self, mode):
+        # TODO: eliminate local_path entirely from the Note class
+        # and create a pseudo filesystem which is based on note titles alone.
+        # Could just take a decent hash (MD5/SHA1) of the note name and use
+        # following
+        #     # note_name -> filename
+        #     from hashlib import sha1
+        #     from base64 import b32encode
+        #     from unicodedata import normalize
+        #     note_norm = normalize('NFKD', note_name).encode('utf-8')
+        #     filename = b32encode(sha1(note_norm)).digest())
+        # which would be 32 chars long.
+        # Given a file, the note is given by the 'title' meta-data.
+        # (see get_internal_title fn above). Files without this would be
+        # ignored.
+        if mode == MODE_CHECK_PRESENT:
+            assert self.local_path, "Expected note local file path to be set"
+            assert os.path.isfile(self.local_path), "Expected note local file %s to exist"%(self.local_path)
+
+        if self.local_path:
+            # check file title matches the note (if it has a title - it could
+            # be a newly created (by us) empty file)
+            int_title = self.get_internal_title(self.local_path)
+            assert int_title in [self.name, None], "%r:%r:%r"%(self.local_path, int_title, self.name)
+            # don't care what we were asked for, once set local_path won't change.
+            return
+
+        # f_base is the full path plus initial note name (without any
+        # id number or extension).
+        f_base = os.path.join(settings.local_dir, self._filename_base())
+
+        # find and return an existing file if we can
+        if mode in [MODE_FIND_NOTE, MODE_FIND_OR_CREATE]:
+            # see if a note matching f_base[.\d+]?.txt exists. If
+            # such a note also contains the relevant title, select it.
+            # If no such exists but a note of matching filename is
+            # present, select that.
+            candidate = None
+            # want to use a regex match, but it gets very confused about
+            # backslash characters in paths on windows, so convert to
+            # forward slashes for comparison. they still work equally
+            # well for the FS operations.
+            fn_match_re = re.compile(r'%s(\.[0-9]+)?\.txt'%(f_base.replace('\\','/')))
+            for fn in os.listdir(settings.local_dir):
+                file_path = os.path.join(settings.local_dir, fn)
+                if (fn_match_re.match(file_path.replace('\\','/')) and
+                    os.path.isfile(file_path)):
+                    note_internal_title = self.get_internal_title(file_path)
+                    if note_internal_title == self.name:
+                        # we have a winner - an authoritative match for note
+                        candidate = file_path
+                        break
+                    elif note_internal_title:
+                        # this note doesn't have any metadata, so not
+                        # authoritative (don't break), but is a candidate.
+                        # Any better (authoritative) match will override this.
+                        candidate = file_path
+            if candidate:
+                self.local_path = candidate
+                return
+
+        if mode == MODE_FIND_NOTE:
+            # we failed to find a matching note.
+            raise SyncError("couldn't find requested note:"%(self.name))
+
+        # at this point we are going to create a new file.
+        if mode in [MODE_CREATE_NEW, MODE_FIND_OR_CREATE]:
+            # Make sure that local_path is an absolute path
+            target_fname = f_base
+            idx = 0
+            while True:
+                # try to create f_base.txt, but if that exists
+                # try f_base.1.txt, f_base.2.txt, and so on.
+                candidate = u"%s%s.txt"%(target_fname, '' if not idx else '.%d'%idx)
+                # XXX: we could probably do some locked open-for-writing type thing
+                # to avoid the race-condition between os.path.exists and the file
+                # creation.  Mustn't truncate existing files though.
+                if not os.path.exists(candidate):
+                    target_fname = candidate
+                    # create the file, so it exists
+                    with codecs.open(target_fname, 'w', 'utf-8') as f:
+                        # create an empty note with this title. This
+                        # will make this path the authoritative file
+                        # for this note.
+                        f.write("Title: %s\n"%(self.name))
+                    break
+                idx += 1
+            self.local_path = target_fname
+            return
+
+        assert False, "Invalid mode given to establish_local_path"
+
     def __cmp__(self, other_note):
         """
         Notes are the same if they have the same name.
@@ -186,16 +351,11 @@ class Note(object):
         # Add tilde indicating backup
         self.local_path = self.local_path + '~'
         logging.debug('Making back-up of note to local: %s' % (self.local_path, ))
-        # - macosx manpage for mktime() respects timezone set with tzset()
-        # - but result is UTC (aka GMT)
-        # - the following composition explicitly performs conversion to local time
-        #utime = time.mktime(time.localtime(calendar.timegm(self.last_modified)))
-        ## stu 110125 # fixed again (did the TN time format change after 100909?)
-        utime = calendar.timegm(self.last_modified)
-        f = open(self.local_path, 'w')
-        f.write(self.contents)
-        f.close()
+        with codecs.open(self.local_path, 'w', 'utf-8') as f:
+            f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
+        utime = calendar.timegm(self.last_modified)
+        ## stu 110125 # fixed again (did the TN time format change after 100909?)
         self.update_time(utime)
         # Do not update related files
         # # ...
@@ -244,14 +404,17 @@ class Note(object):
             os.remove(self.local_path)
             logging.debug('Removed: %s' % (self.local_path, ))
         except OSError:
-            try:
-                # Try removing without extension
-                stripped_path = self.local_path.rsplit('.', 1)[0]
-                logging.debug('Deleting from local: %s, %s' % (self.name, stripped_path))
-                os.remove(stripped_path)
-                logging.debug('Removed: %s' % (stripped_path, ))
-            except:
-                pass
+            stripped_path,ext = os.path.splitext(self.local_path)
+            if ext and os.path.isfile(stripped_path):
+                # this did previously have an extension, i.e. we've
+                # removed something, and a file exists without it.
+                try:
+                    # Try removing without extension
+                    logging.debug(u'Deleting %s from local %s' % (self.name, stripped_path))
+                    os.remove(stripped_path)
+                    logging.debug(u'%s removed' % (stripped_path, ))
+                except:
+                    pass
 
     def hydrate_from_local(self):
         """
@@ -278,13 +441,17 @@ class Note(object):
         """
         logging.debug('Saving to device: %s' % (self.name, ))
         filename = os.path.basename(self.local_path)
-        new_contents = settings.iphone_request('update_note', {'contents': self.contents, 'filename': filename})
+        # filename is only used if this is a new local file
+        # which does not contain the Title: metadata. filename
+        # is used to generate the note title.
+        # any returned file contents must always be utf-8 unicode
+        new_contents = settings.iphone_request('update_note', {'contents': self.contents,
+                                                               'filename': filename})
         # If this is a file, and the file exists locally then upload the file
         if self.name.startswith('File:'):
             filename = self.name[5:]
             file_path = os.path.join(settings.local_files_dir, filename)
             if os.path.exists(file_path):
-                pass
                 settings.iphone_upload_file(filename, file_path)
             else:
                 logging.warn('File for entry does not exist: %s, %s' % (file_path, self.name))
@@ -340,7 +507,8 @@ class SyncSettings(object):
         request_dict.update({'submit': 'sync-%s' % (request_type, )})
         request_dict.update(request_data)
         headers = {'Content-type': 'application/x-www-form-urlencoded'}
-        response, content = self.http.request(self.uri, 'POST', headers=headers, body=urllib.urlencode(request_dict))
+        response, content = self.http.request(self.uri, 'POST',
+                                              headers=headers, body=urllib.urlencode(request_dict))
         if response['status'] == '200':
             return content
         elif response['status'] == '404':
@@ -420,7 +588,6 @@ class SyncAnalyser(object):
         ## stu 100912
         self.overridden_on_iphone = []
         self.overridden_locally = []
-        ##
         
     def analyse(self):
         """
@@ -430,6 +597,7 @@ class SyncAnalyser(object):
         >>> t = SyncAnalyser(iphone_notes, local_notes, lastsync_notes)
         >>> t.analyse()
         Resolve conflict: A note with the same name has been updated on both the iPhone and locally since last sync
+        True
         >>> print t.new_on_iphone
         []
         >>> print t.updated_on_iphone
@@ -443,116 +611,101 @@ class SyncAnalyser(object):
         >>> print t.deleted_locally
         [NoteThree (2)]
         """
-        try:
-            # - for each note from iPhone:
-            #  * mark as NEW ON IPHONE if,
-            #    * not in last sync list
-            #  * mark as UPDATE ON IPHONE if,
-            #    * in last sync list AND last modification date > last sync list
-            for note in self.iphone_notes:
-                if not note in self.lastsync_notes:
-                    self.new_on_iphone.append(note)
-                else:
-                    i = self.lastsync_notes.index(note)
-                    if i >= 0 and note.last_modified > self.lastsync_notes[i].last_modified:
-                        # Get the path of the note locally, so that when the local
-                        # note is updated the correct file will be written to
-                        i2 = self.local_notes.index(note)
-                        assert i2 >= 0, 'Note mentioned in last sync but no connected local note'
-                        note.local_path = self.local_notes[i2].local_path
-                        self.updated_on_iphone.append(note)
-            # - for each note locally:
-            #     * mark as NEW LOCALLY if,
-            #       * not in last sync list
-            #     * mark as UPDATED LOCALLY if,
-            #       * in last sync list AND last modification date > last sync list
-            for note in self.local_notes:
-                if not note in self.lastsync_notes:
-                    self.new_locally.append(note)
-                else:
-                    i = self.lastsync_notes.index(note)
-                    if i >=0 and note.last_modified > self.lastsync_notes[i].last_modified:
-                        self.updated_locally.append(note)
-            # - for each note in last sync list:
-            #     * mark as DELETED ON IPHONE if,
-            #       * not in iPhone list
-            #     * mark as DELETED LOCALLY if,
-            #       * not in local list
-            for note in self.lastsync_notes:
-                if not note in self.iphone_notes:
-                    self.deleted_on_iphone.append(note)
-                if not note in self.local_notes:
-                    self.deleted_locally.append(note)
-            # Resolve conflicts
-            for note in self.new_on_iphone:
-                if note in self.new_locally:
-                    if self.ui:
-                        ## stu 100912 - added backups, when conflicts discovered
-                        answer = self.ui.resolve_conflict('%s has been created on your mobile device and locally.' % (note.name, ), ['device', 'local'])
-                        if answer == 'device':
-                            # User has chosen to keep one on device, so remove local note reference
-                            self.overridden_locally.append(note)
-                            self.new_locally.remove(note)
-                        elif answer == 'local':
-                            self.overridden_on_iphone.append(note)
-                            self.new_on_iphone.remove(note)
-                        else:
-                            assert False, 'Invalid resolve choice'
-                        ##
-                        #answer = self.ui.resolve_conflict('%s has been created on your mobile device and locally.' % (note.name, ), ['device', 'local'])
-                        #if answer == 'device':
-                        #    # User has chosen to keep one on device, so remove local note reference
-                        #    self.new_locally.remove(note)
-                        #elif answer == 'local':
-                        #    self.new_on_iphone.remove(note)
-                        #else:
-                        #    assert False, 'Invalid resolve choice'
-                        ##
+        # - for each note from iPhone:
+        #  * mark as NEW ON IPHONE if,
+        #    * not in last sync list
+        #  * mark as UPDATED ON IPHONE if,
+        #    * in last sync list AND last modification date > last sync list
+        for note in self.iphone_notes:
+            if not note in self.lastsync_notes:
+                # not seen this note before
+                self.new_on_iphone.append(note)
+            else:
+                i = self.lastsync_notes.index(note)
+                if note.last_modified > self.lastsync_notes[i].last_modified:
+                    # Get the path of the note locally, so that when the local
+                    # note is updated the correct file will be written to
+                    i2 = self.local_notes.index(note)
+                    assert i2 >= 0, 'Note mentioned in last sync but no connected local note'
+                    note.local_path = self.local_notes[i2].local_path
+                    self.updated_on_iphone.append(note)
+        # - for each note locally:
+        #     * mark as NEW LOCALLY if,
+        #       * not in last sync list
+        #     * mark as UPDATED LOCALLY if,
+        #       * in last sync list AND last modification date > last sync list
+        for note in self.local_notes:
+            if not note in self.lastsync_notes:
+                self.new_locally.append(note)
+            else:
+                i = self.lastsync_notes.index(note)
+                if note.last_modified > self.lastsync_notes[i].last_modified:
+                    self.updated_locally.append(note)
+        # - for each note in last sync list:
+        #     * mark as DELETED ON IPHONE if,
+        #       * not in iPhone list
+        #     * mark as DELETED LOCALLY if,
+        #       * not in local list
+        for note in self.lastsync_notes:
+            if not note in self.iphone_notes:
+                self.deleted_on_iphone.append(note)
+            if not note in self.local_notes:
+                self.deleted_locally.append(note)
+        # Resolve conflicts.
+        # Note it isn't possible for note to be 'new' on
+        # one location and 'updated' on the other, as
+        # 'new' status derives from a common source - the
+        # last sync list.
+        for note in self.new_on_iphone:
+            if note in self.new_locally:
+                if self.ui:
+                    ## stu 100912 - added backups, when conflicts discovered
+                    answer = self.ui.resolve_conflict('%s has been created on your mobile device and locally.' % (note.name, ), ['device', 'local'])
+                    if answer == 'device':
+                        # User has chosen to keep one on device, so remove local note reference
+                        self.overridden_locally.append(note)
+                        self.new_locally.remove(note)
+                    elif answer == 'local':
+                        self.overridden_on_iphone.append(note)
+                        self.new_on_iphone.remove(note)
                     else:
-                        print 'Resolve conflict: A note with the same name has been created on both the iPhone and locally since last sync'
-                assert not note in self.updated_locally, 'Note new on iPhone but updated locally'
-            for note in self.updated_on_iphone:
-                if note in self.updated_locally:
-                    if self.ui:
-                        ## stu 100912 - logic to backup or diff, when conflicts discovered
-                        answer = self.ui.resolve_conflict('%s has been updated on your mobile device and locally.' % (note.name, ), ['device', 'local'])
-                        if answer == 'device':
-                            # User has chosen to keep one on device, so remove local note reference
-                            self.overridden_locally.append(note)
-                            self.updated_locally.remove(note)
-                        elif answer == 'local':
-                            self.overridden_on_iphone.append(note)
-                            self.updated_on_iphone.remove(note)
-                        else:
-                            assert False, 'Invalid resolve choice'
-                        ##
-                        #answer = self.ui.resolve_conflict('%s has been updated on your mobile device and locally.' % (note.name, ), ['device', 'local'])
-                        #if answer == 'device':
-                        #    # User has chosen to keep one on device, so remove local note reference
-                        #    self.updated_locally.remove(note)
-                        #elif answer == 'local':
-                        #    self.updated_on_iphone.remove(note)
-                        #else:
-                        #    assert False, 'Invalid resolve choice'
-                        ##
+                        assert False, 'Invalid resolve choice'
+                else:
+                    print 'Resolve conflict: A note with the same name has been created on both the iPhone and locally since last sync'
+                    # XXX: perhaps 'return False' here?
+            assert not note in self.updated_locally, 'Note new on iPhone but updated locally'
+        for note in self.updated_on_iphone:
+            if note in self.updated_locally:
+                if self.ui:
+                    ## stu 100912 - logic to backup or diff, when conflicts discovered
+                    answer = self.ui.resolve_conflict('%s has been updated on your mobile device and locally.' % (note.name, ), ['device', 'local'])
+                    if answer == 'device':
+                        # User has chosen to keep one on device, so remove local note reference
+                        self.overridden_locally.append(note)
+                        self.updated_locally.remove(note)
+                    elif answer == 'local':
+                        self.overridden_on_iphone.append(note)
+                        self.updated_on_iphone.remove(note)
                     else:
-                        print 'Resolve conflict: A note with the same name has been updated on both the iPhone and locally since last sync'
-                assert not note in self.new_locally, 'Note updated on iPhone but new locally'
-            # Make sure that no notes which were updated locally are scheduled for deletion locally
-            for note in self.updated_locally:
-                if note in self.deleted_on_iphone:
-                    self.deleted_on_iphone.remove(note)
-            # Make sure that no notes which were updated on the iphone are scheduled for deletion on the iphone
-            for note in self.updated_on_iphone:
-                if note in self.deleted_locally:
-                    self.deleted_locally.remove(note)
-        except ValueError, e:
-            print note
-            print e
-            raise
+                        assert False, 'Invalid resolve choice'
+                else:
+                    print 'Resolve conflict: A note with the same name has been updated on both the iPhone and locally since last sync'
+                    # XXX: perhaps 'return False' here?
+            assert not note in self.new_locally, 'Note updated on iPhone but new locally'
+        # Make sure that no notes which were updated locally are scheduled for deletion locally
+        for note in self.updated_locally:
+            if note in self.deleted_on_iphone:
+                self.deleted_on_iphone.remove(note)
+        # Make sure that no notes which were updated on the iphone are scheduled for deletion on the iphone
+        for note in self.updated_on_iphone:
+            if note in self.deleted_locally:
+                self.deleted_locally.remove(note)
+        ### try:
+        ### except ValueError, e:
+        ###     print note
+        ###     print e
+        ###     raise
         return True
-
-    
 
 class TrunkSync(object):
 
@@ -704,17 +857,17 @@ class TrunkSync(object):
             ##
             # Update local notes with notes from iPhone
             for note in analyser.new_on_iphone:
-                note.hydrate_from_iphone(settings)
-                note.save_to_local(settings)
+                note.hydrate_from_iphone()
+                note.save_to_local()
             for note in analyser.updated_on_iphone:
-                note.hydrate_from_iphone(settings)
-                note.save_to_local(settings)
+                note.hydrate_from_iphone()
+                note.save_to_local()
             for note in analyser.deleted_on_iphone:
-                note.delete_local(settings)
+                note.delete_local()
             # Update iPhone notes with local changes
             for note in analyser.new_locally:
-                note.hydrate_from_local(settings)
-                new_contents = note.save_to_iphone(settings)
+                note.hydrate_from_local()
+                new_contents = note.save_to_iphone()
                 if new_contents is None:
                     continue
                 # Since this is a note which has been created locally
@@ -729,16 +882,20 @@ class TrunkSync(object):
                             note_name = line.split(':', 1)[1].strip()
                             note.name = note_name
                             break
-                    note.save_to_local(settings)
+                    note.save_to_local()
                 else:
                     logging.error('Saving note to device returned ERROR')
             for note in analyser.updated_locally:
-                note.hydrate_from_local(settings)
-                note.save_to_iphone(settings)
+                note.hydrate_from_local()
+                note.save_to_iphone()
             for note in analyser.deleted_locally:
-                note.delete_on_iphone(settings)
+                note.delete_on_iphone()
             # Finally get a raw list of notes from the iPhone
-            # and save this as the lastsync file
+            # and save this as the lastsync file.
+            #
+            # Note we decode as utf-8 then re-encode in utf-8.
+            # Alternatively we could just ensure we write
+            # last_sync_file as binary, but that seems fragile.
             raw_notes = settings.iphone_request('notes_list')
             with codecs.open(self.last_sync_path, 'w', 'utf-8') as last_sync_file:
                 last_sync_file.write(raw_notes)
@@ -760,13 +917,8 @@ class TrunkSync(object):
                 if timestamp:
                     note.update_time(timestamp)
                 else:
-                    ## stu 2010-09-12
                     logging.warn('Could not update the local timestamp of '
-                            'note: %s' % (note.name, ))
-                    ##
-                    #logging.warn('Could not update the timestamp of '
-                    #             'note "%s" on device' % (note.name, ))
-                    ##
+                                 'note: %s' % (note.name, ))
         return True
 
 
@@ -785,6 +937,9 @@ class TrunkDeviceFinder(object):
                      hosttarget, port, txtRecord):
         if errorCode == pybonjour.kDNSServiceErr_NoError:
             # Only care about TrunkNotes service
+            # XXX: currently no unique id per device, so will only find one
+            # device on the local network. If/when Trunk Notes app gets updated
+            # to fix this, this will need updating too.
             if fullname.startswith('TrunkNotes._http._tcp'):
                 self.bonjour_clients.append((fullname, hosttarget, port))
 
@@ -824,8 +979,64 @@ class TrunkDeviceFinder(object):
             resolve_sdRef.close()
 
 
+class TrunkSyncBaseUi(object):
+    """Base class for SimpleUi and EasyUi"""
+
+    def find_trunk(self):
+        device_finder = TrunkDeviceFinder()
+        device_finder.bonjour_search()
+        return device_finder.bonjour_clients
+
+    def get_trunk_instance(self):
+        set_ip, set_port = settings.iphone_ip, settings.iphone_port
+        if set_ip and set_port:
+            chosen_instance = (None, set_ip, set_port)
+        else:
+            trunk_instances = self.find_trunk()
+            if set_ip:
+                # there should only be one trunk instance on any given IP
+                chosen_instance = filter(lambda inst: inst[1] == set_ip,
+                       trunk_instances)[0]
+            else:
+                # Confirm with user which Trunk instance they want to use
+                chosen_instance = self.confirm_instance(trunk_instances)
+
+        return chosen_instance
+
+    def start(self):
+        if not settings.quiet:
+            self.wait_for_continue('Make sure Trunk Notes is running on your iPhone/iPad/iPod Touch. ' +
+                                   'Put Trunk Notes into Wi-Fi Sharing Mode then click Continue. It can ' +
+                                   'take a while to find some devices, depending on your network')
+
+        # 1. Find devices running Trunk and the port
+        chosen_instance = self.get_trunk_instance()
+        if not chosen_instance:
+            self.message('You cancelled mobile device selection. Trunk Sync will now exit')
+            sys.exit(1)
+        if not self.confirm_sync_mode():
+            self.message('Operation cancelled.')
+            sys.exit(1)
+        settings.iphone_ip = chosen_instance[1]
+        settings.iphone_port = chosen_instance[2]
+        # 2. Sync with this Trunk instances
+        success = False
+        while not success:
+            try:
+                sync = TrunkSync(self)
+                success = sync.sync()
+            except IphoneConnectError, e:
+                if e[0]['status'] == '401':
+                    # Authentication error - prompt user
+                    self.message('Authentication required')
+                    settings.iphone_user = self.get_username()
+                    settings.iphone_password = self.get_password()
+                else:
+                    # Unknown error
+                    raise
 
 class TrunkSyncSimpleUi(object):
+    """command line interface to trunksync"""
 
     def __init__(self):
         ## stu 100912
@@ -849,8 +1060,35 @@ class TrunkSyncSimpleUi(object):
         print 'Trunk Sync starting'
         return True
 
-    def error(self, message):
-        print message
+    def wait_for_continue(self, msg):
+        self.message(msg)
+        raw_input('Press [enter] to continue ')
+
+    def message(self, msg):
+        print os.linesep.join(textwrap.wrap(msg))
+
+    def error(self, msg):
+        # no different to normal message for SimpleUI
+        self.message(msg)
+
+    def confirm_sync_mode(self):
+        """
+        GUI mode asks user here if not explicitly set,
+        but if using CLI then user can be expected to
+        provide this in command line options
+        """
+        ok_to_continue = True
+        if settings.sync_mode == 'default':
+            settings.sync_mode = 'sync'
+        elif settings.sync_mode == 'wipelocal':
+            x = raw_input("""CAUTION.
+            This will wipe all local trunksync data from this machine.
+            You should probably use Trunk Notes' backup feature prior
+            to this action to email yourself your data.
+            Are you sure? (type 'yes' to continue with this action)
+            """)
+            ok_to_continue = (x == 'yes')
+        return ok_to_continue
 
     def confirm_instance(self, instances):
         chosen_n = 0
@@ -920,43 +1158,32 @@ class TrunkSyncSimpleUi(object):
                     # Unknown error
                     raise
 
+    def get_username(self):
+        return raw_input('Username: ')
+
+    def get_password(self):
+        return getpass('Password: ')
 
 
-class TrunkSyncEasyUi(object):
-
-    def __init__(self):
-        self.local_path = None
-        self.local_files_dir = None
-        self.last_sync_path = None
-        if sys.platform == 'darwin':
-            base = os.path.join(os.environ['HOME'],
-                                'Library',
-                                'Application Support',
-                                'trunksync',
-                               )
-            self.local_path = os.path.join(base, 'notes')
-            self.local_files_dir = os.path.join(base, 'files')
-            self.last_sync_path = os.path.join(base, 'sync')
-	elif sys.platform == 'win32':
-            base = os.path.join(os.environ['USERPROFILE'],
-                                'trunksync',
-                               )
-            self.local_path = os.path.join(base, 'notes')
-            self.local_files_dir = os.path.join(base, 'files')
-            self.last_sync_path = os.path.join(base, 'sync')
-        self.username = None
-        self.password = None
-
-    def find_trunk(self):
-        device_finder = TrunkDeviceFinder()
-        device_finder.bonjour_search()
-        return device_finder.bonjour_clients
+class TrunkSyncEasyUi(TrunkSyncBaseUi):
+    """EasyGui interface to trunksync"""
 
     def inform_sync_start(self):
         return easygui.ccbox('Starting synchronization with Trunk Notes. ' +
                              'You will be asked to resolve any conflicts before synchronization starts',
                              'Trunk Sync',
                             )
+
+    def message(self, msg):
+        easygui.msgbox(msg,
+                       'Trunk Sync',
+                      )
+
+    def wait_for_continue(self, msg):
+        easygui.msgbox(msg,
+                       'Trunk Sync',
+                       'Continue'
+                      )
 
     def error(self, message):
         easygui.msgbox('Error: %s. Trunk Sync will now exit' % (message, ),
@@ -979,89 +1206,83 @@ class TrunkSyncEasyUi(object):
                                      choices,
                                     )
         return chosen_d
- 
-    def start(self):
-        if not self.local_path:
-            easygui.msgbox('This is an unsupported platform (%s). Feel free to modify this code to add support!' % (sys.platform, ),
-                          )
-            return
-        easygui.msgbox('Make sure Trunk Notes is running on your iPhone/iPad/iPod Touch. ' +
-                       'Put Trunk Notes into Wi-Fi Sharing Mode then click Continue. It can ' +
-                       'take a while to find some devices, depending on your network',
-                       'Trunk Sync',
-                       'Continue',
-                      )
-        # 1. Find devices running Trunk and the port
-        trunk_instances = self.find_trunk()
-        # 2. Confirm with user which Trunk instance they want to use
-        chosen_instance = self.confirm_instance(trunk_instances)
-        if not chosen_instance:
-            easygui.msgbox('You cancelled mobile device selection. Trunk Sync will now exit')
-            sys.exit(1)
-        # 3. Get user to choose whether to sync, backup or restore
-        sync_mode = easygui.buttonbox('You can perform a bi-directional synchronization of notes, ' +
-                                      'backup all notes from your mobile device or restore local notes to your device',
-                                      'Trunk Sync',
-                                      ('Sync', 'Backup', 'Restore'),
-                                     ).lower()
+
+    def confirm_sync_mode(self):
         ok_to_continue = True
-        if sync_mode == 'backup':
+        if settings.sync_mode == 'default':
+            # Get user to choose whether to sync, backup or restore
+            settings.sync_mode = easygui.buttonbox('You can perform a bi-directional synchronization of notes, ' +
+                                          'backup all notes from your mobile device, restore local notes to your device, '+
+                                          'or wipe all local Trunk Sync data from this machine',
+                                          'Trunk Sync',
+                                          ('Sync', 'Backup', 'Restore', 'Wipe Local'),
+                                         ).lower().replace(' ','')
+        if settings.sync_mode == 'backup' and not settings.quiet:
             ok_to_continue = easygui.boolbox('Any local notes which have been modified will be updated with the note from your device. ' +
                                              'Are you sure you wish to continue?',
                                              'Trunk Sync',
                                             )
-        elif sync_mode == 'restore':
+        elif settings.sync_mode == 'restore' and not settings.quiet:
             ok_to_continue = easygui.boolbox('Any notes on your device which have been modified will be updated with the note from this ' +
                                              'computer. Are you sure you wish to continue?',
                                              'Trunk Sync',
                                             )
-        if not ok_to_continue:
-            return
-        # 4. Sync with this Trunk instances
-        username = self.username
-        password = self.password
-        success = False
-        while not success:
-            try:
-                sync = TrunkSync(self,
-                                 chosen_instance[1],
-                                 chosen_instance[2],
-                                 self.local_path,
-                                 self.local_files_dir,
-                                 self.last_sync_path,
-                                 trunk_user=username,
-                                 trunk_password=password)
-                success = sync.sync(sync_mode)
-                if success:
-                    easygui.msgbox('Trunk Sync has finished',
+        elif settings.sync_mode == 'wipelocal':
+            # warn user here regardless of settings.quiet
+            ok_to_continue = easygui.boolbox('CAUTION: This will wipe all local trunksync data from this machine. You should probably use ' +
+                                             'Trunk Notes backup feature prior to this action to email yourself your data. ' +
+                                             'Are you sure you wish to continue?',
+                                             'Trunk Sync'
+                                            )
+        return ok_to_continue
+
+    def get_username(self):
+        return easygui.enterbox('Username',
+                                'Trunk Sync',
+                                '',
+                               )
+
+    def get_password(self):
+        return easygui.passwordbox('Password',
                                    'Trunk Sync',
                                   )
-            except IphoneConnectError, e:
-                if e[0]['status'] == '401':
-                    # Authentication error - prompt user
-                    username = easygui.enterbox('Username',
-                                                'Trunk Sync',
-                                                '',
-                                               )
-                    password = easygui.passwordbox('Password',
-                                                   'Trunk Sync',
-                                                  )
-                else:
-                    # Unknown error
-                    raise
-
-
 
 def _test():
     import doctest
     doctest.testmod()
 
-if __name__ == '__main__':
-    if '-t' in sys.argv:
+def main(args=None):
+    global settings
+    parser = optparse.OptionParser()
+    parser.add_option("-t", "--test", dest="test", action="store_true",
+        help=optparse.SUPPRESS_HELP)
+    parser.add_option("-c", "--cli", dest="cli", action="store_true",
+        help="Use command line interface")
+    parser.add_option("-q", "--quiet", dest="quiet", action="store_true",
+        help="Quiet - don't bother user with unnecessary interaction")
+    parser.add_option("-i", "--ip", dest="ipaddress", metavar="IP_ADDRESS",
+        help="Specify iOS device IP address (optional: use bonjour if not specified)")
+    parser.add_option("-p", "--port", dest="port", metavar="IP_PORT",
+        type=int, default=10000,
+        help="Specify Trunk Notes WiFi sharing port (optional: use bonjour if not specified)")
+    parser.add_option("-r", "--credfile", dest="credentials", metavar="FILE",
+        help="path of credentials file, containing username and password")
+    parser.add_option("-m", "--mode", dest="sync_mode", choices=['sync', 'backup', 'restore', 'wipelocal'],
+        help="sync mode, one of 'sync' [default], 'backup' (copy device->local), 'restore' (copy local->device), 'wipelocal' (remove all local sync info and data [CAUTION!])")
+    if args is None:
+        args = sys.argv[1:]
+
+    options, args = parser.parse_args(args)
+    if options.test:
         _test()
-    elif '-c' in sys.argv:
-        t = TrunkSyncSimpleUi()
-        t.start()
+        sys.exit()
     else:
-        t = TrunkSyncEasyUi()
+        settings = SyncSettings(options)
+        if options.cli:
+            t = TrunkSyncSimpleUi()
+        else:
+            t = TrunkSyncEasyUi()
         t.start()
+
+if __name__ == '__main__':
+    main()
