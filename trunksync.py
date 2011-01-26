@@ -114,6 +114,11 @@ VALID_FILENAME_CHARS = "-_.() %s%s" % (string.ascii_letters, string.digits)
 
 logging.basicConfig(level=logging.DEBUG)
 
+# This is the global settings object.
+# XXX: Should probably make SyncSettings a singleton
+# and use that
+settings = None
+
 
 
 class IphoneConnectError(Exception):
@@ -156,11 +161,9 @@ class Note(object):
     def __repr__(self):
         return '%s (%s)' % (self.name, self.last_modified)
 
-    def hydrate_from_iphone(self, settings):
+    def hydrate_from_iphone(self):
         """
         Get the note from the iPhone
-
-        @param settings: Settings instance
         """
         logging.debug(u'Getting note from device: %s' % (self.name, ))
         self.contents = settings.iphone_request('get_note', {'title': self.name})
@@ -173,11 +176,9 @@ class Note(object):
                 self.file_contents = settings.iphone_get_file(filename)
 
     ## stu 100912
-    def backup_to_local(self, settings):
+    def backup_to_local(self):
         """
         Backup the note to the local storage
-
-        @param settings: Settings instance
         """
         # Make sure that local_path is an absolute path
         if not self.local_path.startswith(settings.local_dir):
@@ -202,19 +203,16 @@ class Note(object):
         self.local_path = self.local_path.rstrip('~')
     ##
 
-    def save_to_local(self, settings):
+    def save_to_local(self):
         """
         Save the note to the local storage
-
-        @param settings: Settings instance
         """
         # Make sure that local_path is an absolute path
         if not self.local_path.startswith(settings.local_dir):
             self.local_path = os.path.join(settings.local_dir, self.local_path)
         logging.debug('Saving note to local: %s' % (self.local_path, ))
-        f = open(self.local_path, 'w')
-        f.write(self.contents)
-        f.close()
+        with codecs.open(self.local_path, 'w', 'utf-8') as f:
+            f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
         utime = calendar.timegm(self.last_modified)
         ## stu 110125 # fixed again (did the TN time format change after 100909?)
@@ -234,11 +232,9 @@ class Note(object):
         assert self.local_path is not None, "local_path not established"
         os.utime(self.local_path, (new_time, new_time))
 
-    def delete_local(self, settings):
+    def delete_local(self):
         """
         Delete the local file representing this note
-
-        @param settings: Settings instance
         """
         # Make sure that local_path is an absolute path
         if not self.local_path.startswith(settings.local_dir):
@@ -257,15 +253,14 @@ class Note(object):
             except:
                 pass
 
-
-    def hydrate_from_local(self, settings):
+    def hydrate_from_local(self):
         """
         Get the note from local
-
-        @param settings: Settings instance
         """
-        logging.debug('Getting note from local: %s, %s' % (self.name, self.local_path))
-        self.contents = open(self.local_path, 'r').read()
+
+        logging.debug(u'Getting note from local: %s, %s' % (self.name, self.local_path))
+        with codecs.open(self.local_path, 'r', 'utf-8') as f:
+            self.contents = f.read()
         # Update the timestamp in the metadata
         new_contents = []
         substituted_timestamp = False
@@ -277,11 +272,9 @@ class Note(object):
             new_contents.append(line + os.linesep)
         self.contents = u''.join(new_contents)
 
-    def save_to_iphone(self, settings):
+    def save_to_iphone(self):
         """
         Save the note to the iPhone
-
-        @param settings: Settings instance
         """
         logging.debug('Saving to device: %s' % (self.name, ))
         filename = os.path.basename(self.local_path)
@@ -297,11 +290,9 @@ class Note(object):
                 logging.warn('File for entry does not exist: %s, %s' % (file_path, self.name))
         return new_contents
 
-    def delete_on_iphone(self, settings):
+    def delete_on_iphone(self):
         """
         Delete the note from the iPhone
-
-        @param settings: Settings instance
         """
         logging.debug('Removing from device: %s' % (self.name, ))
         settings.iphone_request('remove_note', {'title': self.name})
@@ -594,7 +585,7 @@ class TrunkSync(object):
 
         @return: List of Note instances
         """
-        raw_notes = self.settings.iphone_request('notes_list')
+        raw_notes = settings.iphone_request('notes_list')
         notes = []
         for note in raw_notes.splitlines():
             note = note.strip()
@@ -611,7 +602,7 @@ class TrunkSync(object):
         """
         notes = []
         # For each file in the local directory
-        for dirpath, dirnames, filenames in os.walk(self.settings.local_dir):
+        for dirpath, dirnames, filenames in os.walk(settings.local_dir):
             ## stu 101121 - exclude directories
             skip_dir = False
             for dd in IGNORE_DIRS:
@@ -678,10 +669,10 @@ class TrunkSync(object):
         assert mode in ('sync', 'backup', 'restore')
         # Check that required directories exist - if they don't then create
         try:
-            if not os.path.exists(self.settings.local_dir):
-                os.makedirs(self.settings.local_dir)
-            if not os.path.exists(self.settings.local_files_dir):
-                os.makedirs(self.settings.local_files_dir)
+            if not os.path.exists(settings.local_dir):
+                os.makedirs(settings.local_dir)
+            if not os.path.exists(settings.local_files_dir):
+                os.makedirs(settings.local_files_dir)
         except Exception, e:
             self.ui.error('Could not create Trunk Sync directories')
             sys.exit(1)
@@ -704,26 +695,26 @@ class TrunkSync(object):
             ## stu 100912
             # Backup new_locally notes that have been overridden
             for note in analyser.overridden_locally:
-                note.hydrate_from_local(self.settings)
-                note.backup_to_local(self.settings)
+                note.hydrate_from_local(settings)
+                note.backup_to_local(settings)
             # Backup new_on_iphone notes that have been overridden
             for note in analyser.overridden_on_iphone:
-                note.hydrate_from_iphone(self.settings)
-                note.backup_to_local(self.settings)
+                note.hydrate_from_iphone(settings)
+                note.backup_to_local(settings)
             ##
             # Update local notes with notes from iPhone
             for note in analyser.new_on_iphone:
-                note.hydrate_from_iphone(self.settings)
-                note.save_to_local(self.settings)
+                note.hydrate_from_iphone(settings)
+                note.save_to_local(settings)
             for note in analyser.updated_on_iphone:
-                note.hydrate_from_iphone(self.settings)
-                note.save_to_local(self.settings)
+                note.hydrate_from_iphone(settings)
+                note.save_to_local(settings)
             for note in analyser.deleted_on_iphone:
-                note.delete_local(self.settings)
+                note.delete_local(settings)
             # Update iPhone notes with local changes
             for note in analyser.new_locally:
-                note.hydrate_from_local(self.settings)
-                new_contents = note.save_to_iphone(self.settings)
+                note.hydrate_from_local(settings)
+                new_contents = note.save_to_iphone(settings)
                 if new_contents is None:
                     continue
                 # Since this is a note which has been created locally
@@ -738,18 +729,19 @@ class TrunkSync(object):
                             note_name = line.split(':', 1)[1].strip()
                             note.name = note_name
                             break
-                    note.save_to_local(self.settings)
+                    note.save_to_local(settings)
                 else:
                     logging.error('Saving note to device returned ERROR')
             for note in analyser.updated_locally:
-                note.hydrate_from_local(self.settings)
-                note.save_to_iphone(self.settings)
+                note.hydrate_from_local(settings)
+                note.save_to_iphone(settings)
             for note in analyser.deleted_locally:
-                note.delete_on_iphone(self.settings)
+                note.delete_on_iphone(settings)
             # Finally get a raw list of notes from the iPhone
             # and save this as the lastsync file
-            raw_notes = self.settings.iphone_request('notes_list')
-            last_sync_file = open(self.last_sync_path, 'w').write(raw_notes)
+            raw_notes = settings.iphone_request('notes_list')
+            with codecs.open(self.last_sync_path, 'w', 'utf-8') as last_sync_file:
+                last_sync_file.write(raw_notes)
             # Update timestamps on those notes which were new locally
             # but were replaced with versions from the iPhone
             times_from_iphone = {}
