@@ -334,11 +334,26 @@ class Note(object):
         self.contents = settings.iphone_request('get_note', {'title': self.name})
         if self.contents is None:
             return
+        ##if self.name.startswith('File:'):
+        ##    filename = self.name[5:]
+        ##    if filename:
+        ##        # This note has a file component which we should get
+        ##        self.file_contents = settings.iphone_get_file(filename)
+        filename = ''
         if self.name.startswith('File:'):
             filename = self.name[5:]
-            if filename:
+        elif self.name.startswith('File'):
+            filename = self.name[4:]
+        if filename:
+            try:
                 # This note has a file component which we should get
                 self.file_contents = settings.iphone_get_file(filename)
+            except e:
+                logging.warn('Device file not found: %s' % (filename, ))
+                print self
+                print e
+                raise
+
 
     ## stu 100912
     def backup_to_local(self):
@@ -448,8 +463,19 @@ class Note(object):
         new_contents = settings.iphone_request('update_note', {'contents': self.contents,
                                                                'filename': filename})
         # If this is a file, and the file exists locally then upload the file
+        ##if self.name.startswith('File:'):
+        ##    filename = self.name[4:]
+        ##    file_path = os.path.join(settings.local_files_dir, filename)
+        ##    if os.path.exists(file_path):
+        ##        settings.iphone_upload_file(filename, file_path)
+        ##    else:
+        ##        logging.warn('File for entry does not exist: %s, %s' % (file_path, self.name))
+        filename = ''
         if self.name.startswith('File:'):
             filename = self.name[5:]
+        elif self.name.startswith('File'):
+            filename = self.name[4:]
+        if filename:
             file_path = os.path.join(settings.local_files_dir, filename)
             if os.path.exists(file_path):
                 settings.iphone_upload_file(filename, file_path)
