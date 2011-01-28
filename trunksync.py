@@ -135,9 +135,10 @@ import httplib2
 import easygui
 
 DEFAULT_TRUNKS = ['Fly.local', 'Fly.local.']
-
 IGNORE_FILES = ['.lastsync', '.DS_Store', 'Notes & Settings', '.hgignore']
 IGNORE_DIRS = ['Pdf', 'pdf', 'Html', 'html', '.hg']
+
+
 
 VALID_FILENAME_CHARS = "-_.() %s%s" % (string.ascii_letters, string.digits)
 
@@ -180,7 +181,8 @@ class Note(object):
         if not local_path:
             local_path = unicodedata.normalize('NFKD', unicode(name)).encode('ASCII', 'ignore')
             local_path = ''.join(c for c in local_path if c in VALID_FILENAME_CHARS) + '.txt'
-            assert os.path.exists(local_path), 'If local_path is provided it must exist'
+            # ? NOT TRUE FOR : File:fragment-length-bias.png
+            # assert os.path.exists(local_path), 'If local_path is provided it must exist: ' + local_path
         self.local_path = local_path
         self.contents = None       # note text content, utf8
         self.file_contents = None  # binary (str) content of image/sound
@@ -366,7 +368,7 @@ class Note(object):
         # Add tilde indicating backup
         self.local_path = self.local_path + '~'
         logging.debug('Making back-up of note to local: %s' % (self.local_path, ))
-        with codecs.open(self.local_path, 'w', 'utf-8') as f:
+        with open(self.local_path, 'w') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
         utime = calendar.timegm(self.last_modified)
@@ -386,7 +388,7 @@ class Note(object):
         if not self.local_path.startswith(settings.local_dir):
             self.local_path = os.path.join(settings.local_dir, self.local_path)
         logging.debug('Saving note to local: %s' % (self.local_path, ))
-        with codecs.open(self.local_path, 'w', 'utf-8') as f:
+        with open(self.local_path, 'w') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
         utime = calendar.timegm(self.last_modified)
@@ -437,7 +439,7 @@ class Note(object):
         """
 
         logging.debug(u'Getting note from local: %s, %s' % (self.name, self.local_path))
-        with codecs.open(self.local_path, 'r', 'utf-8') as f:
+        with open(self.local_path, 'r') as f:
             self.contents = f.read()
         # Update the timestamp in the metadata
         new_contents = []
@@ -448,13 +450,14 @@ class Note(object):
                 line = 'Timestamp: %s' % (time.strftime('%Y-%m-%d %H:%M:%S +0000', self.last_modified), )
                 substituted_timestamp = True
             new_contents.append(line + os.linesep)
-        self.contents = u''.join(new_contents)
+        self.contents = ''.join(new_contents)
 
     def save_to_iphone(self):
         """
         Save the note to the iPhone
         """
         logging.debug('Saving to device: %s' % (self.name, ))
+
         filename = os.path.basename(self.local_path)
         # filename is only used if this is a new local file
         # which does not contain the Title: metadata. filename
@@ -508,9 +511,23 @@ class SyncSettings(object):
         self.iphone_port = iphone_port
         self.iphone_user = iphone_user
         self.iphone_password = iphone_password
+
+
+
+
+
+
+
+
         self.http = None
         self.uri = None
        
+
+
+
+
+
+
     def setup_iphone_connection(self):
         """
         Setup the connection object with the username and password credentials
@@ -519,6 +536,11 @@ class SyncSettings(object):
         if self.iphone_user:
             self.http.add_credentials(self.iphone_user, self.iphone_password)
         self.uri = 'http://%s:%s' % (self.iphone_ip, self.iphone_port)
+
+
+
+
+
 
     def iphone_request(self, request_type, request_data={}):
         """
@@ -772,6 +794,8 @@ class TrunkSync(object):
             if note:
                 timestamp, title = note.split(':', 1)
                 notes.append(Note(title, time.gmtime(int(timestamp))))
+                # DEBUG HERE
+                print timestamp + " - " + title
         return notes
 
     def get_notes_from_local(self):
@@ -847,6 +871,25 @@ class TrunkSync(object):
         @param mode: Either sync, backup or restore
         """
         assert mode in ('sync', 'backup', 'restore')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         # Check that required directories exist - if they don't then create
         try:
             if not os.path.exists(settings.local_dir):
@@ -924,7 +967,7 @@ class TrunkSync(object):
             # Alternatively we could just ensure we write
             # last_sync_file as binary, but that seems fragile.
             raw_notes = settings.iphone_request('notes_list')
-            with codecs.open(self.last_sync_path, 'w', 'utf-8') as last_sync_file:
+            with open(self.last_sync_path, 'w') as last_sync_file:
                 last_sync_file.write(raw_notes)
             # Update timestamps on those notes which were new locally
             # but were replaced with versions from the iPhone
@@ -946,6 +989,9 @@ class TrunkSync(object):
                 else:
                     logging.warn('Could not update the local timestamp of '
                                  'note: %s' % (note.name, ))
+
+
+
         return True
 
 
@@ -960,6 +1006,7 @@ class TrunkDeviceFinder(object):
     def __init__(self):
         self.bonjour_clients = []
 
+
     def resolve_callback(self, sdRef, flags, interfaceIndex, errorCode, fullname,
                      hosttarget, port, txtRecord):
         if errorCode == pybonjour.kDNSServiceErr_NoError:
@@ -969,6 +1016,7 @@ class TrunkDeviceFinder(object):
             # to fix this, this will need updating too.
             if fullname.startswith('TrunkNotes._http._tcp'):
                 self.bonjour_clients.append((fullname, hosttarget, port))
+
 
     def bonjour_search(self):
         self.browse_sdRef = pybonjour.DNSServiceBrowse(regtype='_http._tcp.',
@@ -1036,6 +1084,10 @@ class TrunkSyncBaseUi(object):
                                    'Put Trunk Notes into Wi-Fi Sharing Mode then click Continue. It can ' +
                                    'take a while to find some devices, depending on your network')
 
+        # # 1. Find devices running Trunk and the port
+        # trunk_instances = self.find_trunk()
+        # # 2. Confirm with user which Trunk instance they want to use
+        # chosen_instance = self.confirm_instance(trunk_instances)
         # 1. Find devices running Trunk and the port
         chosen_instance = self.get_trunk_instance()
         if not chosen_instance:
@@ -1046,13 +1098,33 @@ class TrunkSyncBaseUi(object):
             sys.exit(1)
         settings.iphone_ip = chosen_instance[1]
         settings.iphone_port = chosen_instance[2]
+        # # 3. Sync with this Trunk instances
+        # username = self.username
+        # password = self.password
+        # success = False
         # 2. Sync with this Trunk instances
         success = False
         while not success:
             try:
+                # sync = TrunkSync(self,
+                #                  chosen_instance[1],
+                #                  chosen_instance[2],
+                #                  self.local_path,
+                #                  self.local_files_dir,
+                #                  self.last_sync_path,
+                #                  trunk_user=username,
+                #                  trunk_password=password)
+                # success = sync.sync()
                 sync = TrunkSync(self)
                 success = sync.sync()
             except IphoneConnectError, e:
+                # if e[0]['status'] == '401':
+                #     # Authentication error - prompt user
+                #     username = raw_input('Username: ')
+                #     password = getpass('Password: ')
+                # else:
+                #     # Unknown error
+                #     raise
                 if e[0]['status'] == '401':
                     # Authentication error - prompt user
                     self.message('Authentication required')
@@ -1077,11 +1149,6 @@ class TrunkSyncSimpleUi(object):
         ##
         self.username = None
         self.password = None
-
-    def find_trunk(self):
-        device_finder = TrunkDeviceFinder()
-        device_finder.bonjour_search()
-        return device_finder.bonjour_clients
 
     def inform_sync_start(self):
         print 'Trunk Sync starting'
@@ -1119,15 +1186,16 @@ class TrunkSyncSimpleUi(object):
 
     def confirm_instance(self, instances):
         chosen_n = 0
-        ## stu 100920
-        n = 0
-        assert len(instances) > 0, 'precondition of confirm_instance violated'
-        for instance in instances:
-            n += 1
-            if (instance[1].strip() in DEFAULT_TRUNKS):
-                chosen_n = n
-                print 'Synching with Trunk instance: %d. %s' % (n, instance[1])
-        ##
+        ## stu 110127 - switching to beta2 solution
+        # ## stu 100920
+        # n = 0
+        # assert len(instances) > 0, 'precondition of confirm_instance violated'
+        # for instance in instances:
+        #     n += 1
+        #     if (instance[1].strip() in DEFAULT_TRUNKS):
+        #         chosen_n = n
+        #         print 'Synching with Trunk instance: %d. %s' % (n, instance[1])
+        # ##
         while not (chosen_n > 0 and chosen_n <= len(instances)):
             print 'Choose Trunk to sync with:'
             n = 0
@@ -1155,35 +1223,6 @@ class TrunkSyncSimpleUi(object):
             except ValueError:
                 chosen_n = 0
         return choices[chosen_n - 1]
-    
-    def start(self):
-        # 1. Find devices running Trunk and the port
-        trunk_instances = self.find_trunk()
-        # 2. Confirm with user which Trunk instance they want to use
-        chosen_instance = self.confirm_instance(trunk_instances)
-        # 3. Sync with this Trunk instances
-        username = self.username
-        password = self.password
-        success = False
-        while not success:
-            try:
-                sync = TrunkSync(self,
-                                 chosen_instance[1],
-                                 chosen_instance[2],
-                                 self.local_path,
-                                 self.local_files_dir,
-                                 self.last_sync_path,
-                                 trunk_user=username,
-                                 trunk_password=password)
-                success = sync.sync()
-            except IphoneConnectError, e:
-                if e[0]['status'] == '401':
-                    # Authentication error - prompt user
-                    username = raw_input('Username: ')
-                    password = getpass('Password: ')
-                else:
-                    # Unknown error
-                    raise
 
     def get_username(self):
         return raw_input('Username: ')
