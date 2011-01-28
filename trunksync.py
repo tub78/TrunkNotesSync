@@ -416,10 +416,10 @@ class Note(object):
         # Make sure that local_path is an absolute path
         if not self.local_path.startswith(settings.local_dir):
             self.local_path = os.path.join(settings.local_dir, self.local_path)
-        logging.debug('Deleting from local: %s, %s' % (self.name, self.local_path))
+        logging.debug(u'Deleting from local: %s, %s' % (self.name, self.local_path))
         try:
             os.remove(self.local_path)
-            logging.debug('Removed: %s' % (self.local_path, ))
+            logging.debug(u'Removed: %s' % (self.local_path, ))
         except OSError:
             stripped_path,ext = os.path.splitext(self.local_path)
             if ext and os.path.isfile(stripped_path):
@@ -456,7 +456,7 @@ class Note(object):
         """
         Save the note to the iPhone
         """
-        logging.debug('Saving to device: %s' % (self.name, ))
+        logging.debug(u'Saving to device: %s' % (self.name, ))
 
         filename = os.path.basename(self.local_path)
         # filename is only used if this is a new local file
@@ -483,14 +483,14 @@ class Note(object):
             if os.path.exists(file_path):
                 settings.iphone_upload_file(filename, file_path)
             else:
-                logging.warn('File for entry does not exist: %s, %s' % (file_path, self.name))
+                logging.warn(u'File for entry does not exist: %s, %s' % (file_path, self.name))
         return new_contents
 
     def delete_on_iphone(self):
         """
         Delete the note from the iPhone
         """
-        logging.debug('Removing from device: %s' % (self.name, ))
+        logging.debug(u'Removing from device: %s' % (self.name, ))
         settings.iphone_request('remove_note', {'title': self.name})
 
 
@@ -991,7 +991,6 @@ class TrunkSync(object):
                                  'note: %s' % (note.name, ))
 
 
-
         return True
 
 
@@ -1134,7 +1133,7 @@ class TrunkSyncBaseUi(object):
                     # Unknown error
                     raise
 
-class TrunkSyncSimpleUi(object):
+class TrunkSyncSimpleUi(TrunkSyncBaseUi):
     """command line interface to trunksync"""
 
     def __init__(self):
