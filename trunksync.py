@@ -751,11 +751,12 @@ class TrunkSync(object):
         self.trunk_port = trunk_port
         self.local_path = local_path
         self.last_sync_path = last_sync_path
-        self.settings = SyncSettings(local_path, local_files_dir, trunk_ip, trunk_port, trunk_user, trunk_password)
-        self.settings.setup_iphone_connection()
+        global settings
+        settings = SyncSettings(local_path, local_files_dir, trunk_ip, trunk_port, trunk_user, trunk_password)
+        settings.setup_iphone_connection()
         # Get the UUID of the device and modify last_sync_path accordingly
         # This is to support syncing with multiple devices
-        uuid = self.settings.iphone_request('uuid')
+        uuid = settings.iphone_request('uuid')
         self.last_sync_path += '-%s' % (uuid, )
 
     def get_notes_from_iphone(self):
@@ -1303,7 +1304,7 @@ def main(args=None):
         _test()
         sys.exit()
     else:
-        settings = SyncSettings(options)
+        # settings = SyncSettings(options)
         if options.cli:
             t = TrunkSyncSimpleUi()
         else:
