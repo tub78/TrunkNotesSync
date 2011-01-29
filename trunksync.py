@@ -178,6 +178,10 @@ class Note(object):
         """
         self.name = name
         self.last_modified = last_modified
+        if local_path:
+            if not local_path.startswith(settings.local_dir):
+                local_path = os.path.join(settings.local_dir, local_path)
+            assert os.path.exists(local_path), 'If local_path is provided it must exist'
         if not local_path:
             local_path = unicodedata.normalize('NFKD', unicode(name)).encode('ASCII', 'ignore')
             local_path = ''.join(c for c in local_path if c in VALID_FILENAME_CHARS) + '.txt'
@@ -215,7 +219,7 @@ class Note(object):
         @return: title of note form internal metadata, or None
         """
         note_name = None
-        with codecs.open(note_path, 'r', 'utf-8') as f:
+        with open(note_path, 'r') as f:
             for line in f:
                 if line.startswith('Title: '):
                     note_name = line.split(':', 1)[1].strip()
@@ -302,7 +306,7 @@ class Note(object):
                 if not os.path.exists(candidate):
                     target_fname = candidate
                     # create the file, so it exists
-                    with codecs.open(target_fname, 'w', 'utf-8') as f:
+                    with open(target_fname, 'w') as f:
                         # create an empty note with this title. This
                         # will make this path the authoritative file
                         # for this note.
@@ -336,11 +340,6 @@ class Note(object):
         self.contents = settings.iphone_request('get_note', {'title': self.name})
         if self.contents is None:
             return
-        ##if self.name.startswith('File:'):
-        ##    filename = self.name[5:]
-        ##    if filename:
-        ##        # This note has a file component which we should get
-        ##        self.file_contents = settings.iphone_get_file(filename)
         filename = ''
         if self.name.startswith('File:'):
             filename = self.name[5:]
@@ -357,16 +356,13 @@ class Note(object):
                 raise
 
 
-    ## stu 100912
     def backup_to_local(self):
         """
         Backup the note to the local storage
         """
-        # Make sure that local_path is an absolute path
-        if not self.local_path.startswith(settings.local_dir):
-            self.local_path = os.path.join(settings.local_dir, self.local_path)
         # Add tilde indicating backup
         self.local_path = self.local_path + '~'
+        self.establish_local_path(MODE_FIND_OR_CREATE)
         logging.debug('Making back-up of note to local: %s' % (self.local_path, ))
         with open(self.local_path, 'w') as f:
             f.write(self.contents)
@@ -374,19 +370,15 @@ class Note(object):
         utime = calendar.timegm(self.last_modified)
         ## stu 110125 # fixed again (did the TN time format change after 100909?)
         self.update_time(utime)
-        # Do not update related files
-        # # ...
+        # ... ignoring related images files ... 
         # Now remove tilde from local path name
         self.local_path = self.local_path.rstrip('~')
-    ##
 
     def save_to_local(self):
         """
         Save the note to the local storage
         """
-        # Make sure that local_path is an absolute path
-        if not self.local_path.startswith(settings.local_dir):
-            self.local_path = os.path.join(settings.local_dir, self.local_path)
+        self.establish_local_path(MODE_FIND_OR_CREATE)
         logging.debug('Saving note to local: %s' % (self.local_path, ))
         with open(self.local_path, 'w') as f:
             f.write(self.contents)
@@ -413,9 +405,7 @@ class Note(object):
         """
         Delete the local file representing this note
         """
-        # Make sure that local_path is an absolute path
-        if not self.local_path.startswith(settings.local_dir):
-            self.local_path = os.path.join(settings.local_dir, self.local_path)
+        self.establish_local_path(MODE_FIND_NOTE)
         logging.debug(u'Deleting from local: %s, %s' % (self.name, self.local_path))
         try:
             os.remove(self.local_path)
@@ -437,7 +427,7 @@ class Note(object):
         """
         Get the note from local
         """
-
+        self.establish_local_path(MODE_FIND_NOTE)
         logging.debug(u'Getting note from local: %s, %s' % (self.name, self.local_path))
         with open(self.local_path, 'r') as f:
             self.contents = f.read()
@@ -457,7 +447,7 @@ class Note(object):
         Save the note to the iPhone
         """
         logging.debug(u'Saving to device: %s' % (self.name, ))
-
+        self.establish_local_path(MODE_CHECK_PRESENT)
         filename = os.path.basename(self.local_path)
         # filename is only used if this is a new local file
         # which does not contain the Title: metadata. filename
@@ -466,13 +456,6 @@ class Note(object):
         new_contents = settings.iphone_request('update_note', {'contents': self.contents,
                                                                'filename': filename})
         # If this is a file, and the file exists locally then upload the file
-        ##if self.name.startswith('File:'):
-        ##    filename = self.name[4:]
-        ##    file_path = os.path.join(settings.local_files_dir, filename)
-        ##    if os.path.exists(file_path):
-        ##        settings.iphone_upload_file(filename, file_path)
-        ##    else:
-        ##        logging.warn('File for entry does not exist: %s, %s' % (file_path, self.name))
         filename = ''
         if self.name.startswith('File:'):
             filename = self.name[5:]
@@ -496,37 +479,51 @@ class Note(object):
 
 class SyncSettings(object):
 
-    def __init__(self, local_dir, local_files_dir, iphone_ip, iphone_port, iphone_user, iphone_password):
+    def __init__(self, options):
         """
-        @param local_dir: Local directory where note text files will be stored
-        @param local_files_dir: Local directory where images, sound recordings will be stored
-        @param iphone_ip: IP address of iPhone
-        @param iphone_port: Port
-        @param iphone_user: Username (if required)
-        @param iphone_password: Corresponding username (plaintext)
+        Establish SyncSettings object
+
+        darwin:local_dir  [ ~/Documents/TrunkNotes/Notes      ] : Local directory where note text files will be stored
+        other:local_dir   [ ~/trunksync                       ] : Local directory where note text files will be stored
+        local_files_dir   [ ~/Documents/TrunkNotes/Files      ] : Local directory where images, sound recordings will be stored
+        last_sync_path    [ ~/Documents/TrunkNotes/.trunksync ] : Local file where last-modifed timestamps will be stored
+        iphone_user       [ None                              ] : Username (if required)  - see also options:credentials
+        iphone_password   [ None                              ] : Corresponding username (plaintext)  - see also options:credentials
+        quiet             [ options.quiet or False            ] : Verbosity
+        iphone_ip         [ options.ipaddress                 ] : IP address of iPhone
+        iphone_port       [ options.port                      ] : Port
+        http              [ None                              ] : 
+        uri               [ None                              ] : 
+        sync_mode         [ options.sync_mode or 'default'    ] : 'sync', 'backup', 'restore', or 'wipelocal'
         """
-        self.local_dir = local_dir
-        self.local_files_dir = local_files_dir
-        self.iphone_ip = iphone_ip
-        self.iphone_port = iphone_port
-        self.iphone_user = iphone_user
-        self.iphone_password = iphone_password
+        if sys.platform == 'darwin':
+            base = os.environ['HOME']
+        else:
+            base = os.path.expanduser('~/trunksync')
+        self.local_dir = os.path.join(base, 'Documents', 'TrunkNotes', 'Notes'      ) 
+        self.local_files_dir = os.path.join(base, 'Documents', 'TrunkNotes', 'Files'      ) 
+        self.last_sync_path = os.path.join(base, 'Documents', 'TrunkNotes', '.trunksync' ) 
+        self.iphone_user = None
+        self.iphone_password = None
+        if options.credentials:
+            with file(options.credentials) as f:
+                creds = f.read()
+            atoms = shlex.split(creds)
+            if len(atoms) != 2:
+                raise SystemExit("Invalid trunknotes credentials file")
+            self.iphone_user, self.iphone_password = atoms
 
-
-
-
-
-
-
-
+        self.quiet = options.quiet or False
+        self.iphone_ip = options.ipaddress # will be None if not set
+        self.iphone_port = options.port # will be None if not set
         self.http = None
         self.uri = None
-       
-
-
-
-
-
+        if options.sync_mode in ['sync', 'backup', 'restore', 'wipelocal']:
+            self.sync_mode = options.sync_mode
+        else:
+            # XXX: note default is converted to sync automatically by SimpeUI,
+            # but EasyUI asks user if not set.
+            self.sync_mode = 'default'
 
     def setup_iphone_connection(self):
         """
@@ -536,11 +533,11 @@ class SyncSettings(object):
         if self.iphone_user:
             self.http.add_credentials(self.iphone_user, self.iphone_password)
         self.uri = 'http://%s:%s' % (self.iphone_ip, self.iphone_port)
-
-
-
-
-
+        # Get the UUID of the device and modify last_sync_path accordingly
+        # This is to support syncing with multiple devices
+        uuid = self.iphone_request('uuid')
+        if not self.last_sync_path.endswith(uuid):
+            self.last_sync_path += '-%s' % (uuid, )
 
     def iphone_request(self, request_type, request_data={}):
         """
@@ -671,11 +668,11 @@ class SyncAnalyser(object):
             else:
                 i = self.lastsync_notes.index(note)
                 if note.last_modified > self.lastsync_notes[i].last_modified:
-                    # Get the path of the note locally, so that when the local
-                    # note is updated the correct file will be written to
-                    i2 = self.local_notes.index(note)
-                    assert i2 >= 0, 'Note mentioned in last sync but no connected local note'
-                    note.local_path = self.local_notes[i2].local_path
+                    # # Get the path of the note locally, so that when the local
+                    # # note is updated the correct file will be written to
+                    # i2 = self.local_notes.index(note)
+                    # assert i2 >= 0, 'Note mentioned in last sync but no connected local note'
+                    # note.local_path = self.local_notes[i2].local_path
                     self.updated_on_iphone.append(note)
         # - for each note locally:
         #     * mark as NEW LOCALLY if,
@@ -708,6 +705,7 @@ class SyncAnalyser(object):
             if note in self.new_locally:
                 if self.ui:
                     ## stu 100912 - added backups, when conflicts discovered
+                    noi, nol = self.new_on_iphone, self.new_locally
                     answer = self.ui.resolve_conflict('%s has been created on your mobile device and locally.' % (note.name, ), ['device', 'local'])
                     if answer == 'device':
                         # User has chosen to keep one on device, so remove local note reference
@@ -757,29 +755,13 @@ class SyncAnalyser(object):
 
 class TrunkSync(object):
 
-    def __init__(self, ui, trunk_ip, trunk_port, local_path, local_files_dir, last_sync_path, trunk_user=None, trunk_password=None):
+    def __init__(self, ui):
         """
         @param ui: UI to use
-        @param trunk_ip: IP address of running Trunk Notes on mobile device
-        @param trunk_port
-        @param local_path: Path to notes as text files on local computer
-        @param local_files_dir: Path to directory containing images, sound recordings, etc
-        @param last_sync_path: Path to file with last sync status
-        @param trunk_user: username to use
-        @param trunk_password: password
         """
+
         self.ui = ui
-        self.trunk_ip = trunk_ip
-        self.trunk_port = trunk_port
-        self.local_path = local_path
-        self.last_sync_path = last_sync_path
-        global settings
-        settings = SyncSettings(local_path, local_files_dir, trunk_ip, trunk_port, trunk_user, trunk_password)
         settings.setup_iphone_connection()
-        # Get the UUID of the device and modify last_sync_path accordingly
-        # This is to support syncing with multiple devices
-        uuid = settings.iphone_request('uuid')
-        self.last_sync_path += '-%s' % (uuid, )
 
     def get_notes_from_iphone(self):
         """
@@ -803,11 +785,15 @@ class TrunkSync(object):
         Get a list of notes from the local computer
 
         @return: List of Note instances
+        Only consider .txt files
+        Exclude dot files
+        Exclude backup (~ tilde) files
+        Exclude IGNORE files
         """
-        notes = []
+        notes = {}
         # For each file in the local directory
         for dirpath, dirnames, filenames in os.walk(settings.local_dir):
-            ## stu 101121 - exclude directories
+            # stu 101121 - exclude directories
             skip_dir = False
             for dd in IGNORE_DIRS:
                 if "/"+dd in dirpath:
@@ -815,34 +801,27 @@ class TrunkSync(object):
                     break
             if skip_dir:
                 continue
-            ##
             for filename in filenames:
-                ## stu 100912
-                if filename.startswith('.') or filename.endswith('~') or filename in IGNORE_FILES:
-                   continue
-                #if filename.startswith('.') or filename in IGNORE_FILES:
-                #    continue
-                ##
+                if filename.startswith('.') or not filename.endswith('.txt') or filename.endswith('~') or filename in IGNORE_FILES:
+                    continue
+                    # only consider .txt files
                 note_path = os.path.join(dirpath, filename)
-                # For a local note the timestamp is just the file's last modified date
+                # For a local note the timestamp is just the files last modified date
                 last_modified = time.gmtime(os.stat(note_path).st_mtime)
-                # TODO: Will above work on Windows - or does time need to be treated differently???
-                # However its title is preferrably from the Title: metadata, if this does
+                # Note title is preferrably from the Title: metadata, if this does
                 # not exist then it will be the filename (minus the file extension)
-                f = open(note_path, 'r')
-                note_name = None
-                line = f.readline()
-                while line:
-                    if line.startswith('Title: '):
-                        note_name = line.split(':', 1)[1].strip()
-                        break
-                    line = f.readline()
-                f.close()
+                note_name = Note.get_internal_title(note_path)
                 if not note_name:
-                    # Remove any file extension
-                    note_name = filename.rsplit('.', 1)[0]
-                notes.append(Note(note_name, last_modified, local_path=note_path))
-        return notes
+                    # Remove any file extension. Hopefully we don't have
+                    # any other notes of the same name, but all bets are
+                    # off really without the metadata.
+                    note_name = os.path.splitext(filename)[0]
+                if note_name in notes:
+                    if notes[note_name].last_modified > last_modified:
+                        logging.warn(u'Multiple local notes for "%s" - using most recent'%(note_name))
+                        continue
+                notes[note_name] = Note(note_name, last_modified, local_path=note_path)
+        return notes.values()
 
     def get_notes_from_lastsync(self):
         """
@@ -852,7 +831,7 @@ class TrunkSync(object):
         """
         notes = []
         # Assuming not the first time synced with this directory
-        if os.path.exists(self.last_sync_path):
+        if os.path.exists(settings.last_sync_path):
             for line in open(self.last_sync_path, 'r').readlines():
                 line = line.strip()
                 if line:
@@ -860,7 +839,7 @@ class TrunkSync(object):
                 notes.append(Note(title, time.gmtime(int(timestamp))))
         return notes
 
-    def sync(self, mode='sync'):
+    def sync(self):
         """
         Perform synchronization
 
@@ -868,27 +847,27 @@ class TrunkSync(object):
                     backup - get notes from iPhone only, overwriting local modifications
                     restore - Send local files to iPhonen regardless of iPhone notes
 
-        @param mode: Either sync, backup or restore
+        uses settings.sync_mode: Either sync, backup or restore
         """
-        assert mode in ('sync', 'backup', 'restore')
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        mode = settings.sync_mode
+        assert mode in ('sync', 'backup', 'restore', 'wipelocal')
+        if mode == 'wipelocal':
+            # remove last_sync file first, as if we're interrupted and
+            # have removed notes/files but not updated sync file, corresponding
+            # notes will get removed from the device. which is bad.
+            try:
+                os.remove(settings.last_sync_path)
+            except OSError:
+                pass
+            try:
+                shutil.rmtree(settings.local_dir)
+            except OSError:
+                pass
+            try:
+                shutil.rmtree(settings.local_files_dir)
+            except OSError:
+                pass
+            return True
 
         # Check that required directories exist - if they don't then create
         try:
@@ -915,7 +894,7 @@ class TrunkSync(object):
             elif mode == 'restore':
                 # If restoring then new_locally is all notes from the local store
                 analyser.new_locally = local_notes
-            ## stu 100912
+            # stu 100912
             # Backup new_locally notes that have been overridden
             for note in analyser.overridden_locally:
                 note.hydrate_from_local(settings)
@@ -924,7 +903,6 @@ class TrunkSync(object):
             for note in analyser.overridden_on_iphone:
                 note.hydrate_from_iphone(settings)
                 note.backup_to_local(settings)
-            ##
             # Update local notes with notes from iPhone
             for note in analyser.new_on_iphone:
                 note.hydrate_from_iphone()
@@ -991,6 +969,7 @@ class TrunkSync(object):
                                  'note: %s' % (note.name, ))
 
 
+        self.ui.message('Trunk Sync has finished')
         return True
 
 
@@ -1002,9 +981,9 @@ class TrunkDeviceFinder(object):
 
     timeout = 5
 
-    def __init__(self):
+    def __init__(self, ipaddr=None):
         self.bonjour_clients = []
-
+        self.target_ip = ipaddr
 
     def resolve_callback(self, sdRef, flags, interfaceIndex, errorCode, fullname,
                      hosttarget, port, txtRecord):
@@ -1014,8 +993,8 @@ class TrunkDeviceFinder(object):
             # device on the local network. If/when Trunk Notes app gets updated
             # to fix this, this will need updating too.
             if fullname.startswith('TrunkNotes._http._tcp'):
-                self.bonjour_clients.append((fullname, hosttarget, port))
-
+                if self.target_ip in [None, hosttarget]:
+                    self.bonjour_clients.append((fullname, hosttarget, port))
 
     def bonjour_search(self):
         self.browse_sdRef = pybonjour.DNSServiceBrowse(regtype='_http._tcp.',
@@ -1083,10 +1062,6 @@ class TrunkSyncBaseUi(object):
                                    'Put Trunk Notes into Wi-Fi Sharing Mode then click Continue. It can ' +
                                    'take a while to find some devices, depending on your network')
 
-        # # 1. Find devices running Trunk and the port
-        # trunk_instances = self.find_trunk()
-        # # 2. Confirm with user which Trunk instance they want to use
-        # chosen_instance = self.confirm_instance(trunk_instances)
         # 1. Find devices running Trunk and the port
         chosen_instance = self.get_trunk_instance()
         if not chosen_instance:
@@ -1097,33 +1072,13 @@ class TrunkSyncBaseUi(object):
             sys.exit(1)
         settings.iphone_ip = chosen_instance[1]
         settings.iphone_port = chosen_instance[2]
-        # # 3. Sync with this Trunk instances
-        # username = self.username
-        # password = self.password
-        # success = False
         # 2. Sync with this Trunk instances
         success = False
         while not success:
             try:
-                # sync = TrunkSync(self,
-                #                  chosen_instance[1],
-                #                  chosen_instance[2],
-                #                  self.local_path,
-                #                  self.local_files_dir,
-                #                  self.last_sync_path,
-                #                  trunk_user=username,
-                #                  trunk_password=password)
-                # success = sync.sync()
                 sync = TrunkSync(self)
                 success = sync.sync()
             except IphoneConnectError, e:
-                # if e[0]['status'] == '401':
-                #     # Authentication error - prompt user
-                #     username = raw_input('Username: ')
-                #     password = getpass('Password: ')
-                # else:
-                #     # Unknown error
-                #     raise
                 if e[0]['status'] == '401':
                     # Authentication error - prompt user
                     self.message('Authentication required')
@@ -1136,18 +1091,6 @@ class TrunkSyncBaseUi(object):
 class TrunkSyncSimpleUi(TrunkSyncBaseUi):
     """command line interface to trunksync"""
 
-    def __init__(self):
-        ## stu 100912
-        self.local_path      = os.path.join(os.environ['HOME'], 'Documents', 'TrunkNotes', 'Notes'      ) 
-        self.local_files_dir = os.path.join(os.environ['HOME'], 'Documents', 'TrunkNotes', 'Files'      ) 
-        self.last_sync_path  = os.path.join(os.environ['HOME'], 'Documents', 'TrunkNotes', '.trunksync' ) 
-        ##
-        #self.local_path      = os.path.join(os.environ['HOME'], 'trunksync'      ) 
-        #self.local_files_dir = os.path.join(os.environ['HOME'], 'trunksyncfiles' ) 
-        #self.last_sync_path  = os.path.join(os.environ['HOME'], '.trunksync'     ) 
-        ##
-        self.username = None
-        self.password = None
 
     def inform_sync_start(self):
         print 'Trunk Sync starting'
@@ -1342,7 +1285,7 @@ def main(args=None):
         _test()
         sys.exit()
     else:
-        # settings = SyncSettings(options)
+        settings = SyncSettings(options)
         if options.cli:
             t = TrunkSyncSimpleUi()
         else:
