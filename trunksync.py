@@ -182,11 +182,11 @@ class Note(object):
             if not local_path.startswith(settings.local_dir):
                 local_path = os.path.join(settings.local_dir, local_path)
             assert os.path.exists(local_path), 'If local_path is provided it must exist'
-        if not local_path:
-            local_path = unicodedata.normalize('NFKD', unicode(name)).encode('ASCII', 'ignore')
-            local_path = ''.join(c for c in local_path if c in VALID_FILENAME_CHARS) + '.txt'
-            # ? NOT TRUE FOR : File:fragment-length-bias.png
-            # assert os.path.exists(local_path), 'If local_path is provided it must exist: ' + local_path
+        #if not local_path:
+        #    local_path = unicodedata.normalize('NFKD', unicode(name)).encode('ASCII', 'ignore')
+        #    local_path = ''.join(c for c in local_path if c in VALID_FILENAME_CHARS) + '.txt'
+        #    # ? NOT TRUE FOR : File:fragment-length-bias.png
+        #    # assert os.path.exists(local_path), 'If local_path is provided it must exist: ' + local_path
         self.local_path = local_path
         self.contents = None       # note text content, utf8
         self.file_contents = None  # binary (str) content of image/sound
@@ -330,7 +330,16 @@ class Note(object):
         return cmp(self.name.lower(), other_note.name.lower())
 
     def __repr__(self):
-        return '%s (%s)' % (self.name, self.last_modified)
+        msg_local_path = "EMPTY"
+        msg_contents = "0"
+        msg_file_contents = "0"
+        if self.local_path:
+            msg_local_path = self.local_path
+        if self.contents:
+            msg_contents = "" + str(len(self.contents))
+        if self.file_contents:
+            msg_file_contents = "" + str(len(self.file_contents))
+        return '%s - %s - %s - %s - %s' % (self.name, self.last_modified, msg_local_path, msg_contents, msg_file_contents)
 
     def hydrate_from_iphone(self):
         """
@@ -338,6 +347,8 @@ class Note(object):
         """
         logging.debug(u'Getting note from device: %s' % (self.name, ))
         self.contents = settings.iphone_request('get_note', {'title': self.name})
+        # HERE
+        print self
         if self.contents is None:
             return
         filename = ''
@@ -832,7 +843,7 @@ class TrunkSync(object):
         notes = []
         # Assuming not the first time synced with this directory
         if os.path.exists(settings.last_sync_path):
-            for line in open(self.last_sync_path, 'r').readlines():
+            for line in open(settings.last_sync_path, 'r').readlines():
                 line = line.strip()
                 if line:
                     timestamp, title = line.split(':', 1)
@@ -945,7 +956,7 @@ class TrunkSync(object):
             # Alternatively we could just ensure we write
             # last_sync_file as binary, but that seems fragile.
             raw_notes = settings.iphone_request('notes_list')
-            with open(self.last_sync_path, 'w') as last_sync_file:
+            with open(settings.last_sync_path, 'w') as last_sync_file:
                 last_sync_file.write(raw_notes)
             # Update timestamps on those notes which were new locally
             # but were replaced with versions from the iPhone
