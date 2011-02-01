@@ -647,8 +647,9 @@ class SyncAnalyser(object):
         self.deleted_on_iphone = []
         self.deleted_locally = []
         ## stu 100912
-        self.overridden_on_iphone = []
-        self.overridden_locally = []
+        ## stu 110131 - DISABLED, enable get_internal_title()
+        #self.overridden_on_iphone = []
+        #self.overridden_locally = []
         
     def analyse(self):
         """
@@ -721,14 +722,15 @@ class SyncAnalyser(object):
             if note in self.new_locally:
                 if self.ui:
                     ## stu 100912 - added backups, when conflicts discovered
+                    ## stu 110131 - DISABLED, enable get_internal_title()
                     noi, nol = self.new_on_iphone, self.new_locally
                     answer = self.ui.resolve_conflict('%s has been created on your mobile device and locally.' % (note.name, ), ['device', 'local'])
                     if answer == 'device':
                         # User has chosen to keep one on device, so remove local note reference
-                        self.overridden_locally.append(note)
+                        ## self.overridden_locally.append(note)
                         self.new_locally.remove(note)
                     elif answer == 'local':
-                        self.overridden_on_iphone.append(note)
+                        ## self.overridden_on_iphone.append(note)
                         self.new_on_iphone.remove(note)
                     else:
                         assert False, 'Invalid resolve choice'
@@ -740,13 +742,14 @@ class SyncAnalyser(object):
             if note in self.updated_locally:
                 if self.ui:
                     ## stu 100912 - logic to backup or diff, when conflicts discovered
+                    ## stu 110131 - DISABLED, enable get_internal_title()
                     answer = self.ui.resolve_conflict('%s has been updated on your mobile device and locally.' % (note.name, ), ['device', 'local'])
                     if answer == 'device':
                         # User has chosen to keep one on device, so remove local note reference
-                        self.overridden_locally.append(note)
+                        ##self.overridden_locally.append(note)
                         self.updated_locally.remove(note)
                     elif answer == 'local':
-                        self.overridden_on_iphone.append(note)
+                        ##self.overridden_on_iphone.append(note)
                         self.updated_on_iphone.remove(note)
                     else:
                         assert False, 'Invalid resolve choice'
@@ -911,14 +914,15 @@ class TrunkSync(object):
                 # If restoring then new_locally is all notes from the local store
                 analyser.new_locally = local_notes
             # stu 100912
+            ## stu 110131 - DISABLED, enable get_internal_title()
             # Backup new_locally notes that have been overridden
-            for note in analyser.overridden_locally:
-                note.hydrate_from_local()
-                note.backup_to_local()
+            ## for note in analyser.overridden_locally:
+            ##     note.hydrate_from_local()
+            ##     note.backup_to_local()
             # Backup new_on_iphone notes that have been overridden
-            for note in analyser.overridden_on_iphone:
-                note.hydrate_from_iphone()
-                note.backup_to_local()
+            ## for note in analyser.overridden_on_iphone:
+            ##     note.hydrate_from_iphone()
+            #     note.backup_to_local()
             # Update local notes with notes from iPhone
             for note in analyser.new_on_iphone:
                 note.hydrate_from_iphone()
