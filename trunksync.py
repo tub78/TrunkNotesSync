@@ -208,7 +208,10 @@ class Note(object):
                 last_char_invalid = False
             else:
                 if not last_char_invalid:
-                    target_fname.append('_')
+                    #invalid character replacement symbol: '_'
+                    ##target_fname.append('_')
+                    ###HERE
+                    pass
                 last_char_invalid = True
         return ''.join(target_fname)
 
@@ -219,7 +222,7 @@ class Note(object):
         @return: title of note form internal metadata, or None
         """
         note_name = None
-        with open(note_path, 'r') as f:
+        with codecs.open(note_path, 'r', 'utf-8') as f:
             for line in f:
                 if line.startswith('Title: '):
                     note_name = line.split(':', 1)[1].strip()
@@ -289,7 +292,9 @@ class Note(object):
 
         if mode == MODE_FIND_NOTE:
             # we failed to find a matching note.
-            raise SyncError("couldn't find requested note:"%(self.name))
+            # HERE
+            print self
+            raise SyncError(u"couldn't find requested note: %s" % (self.name, ))
 
         # at this point we are going to create a new file.
         if mode in [MODE_CREATE_NEW, MODE_FIND_OR_CREATE]:
@@ -306,7 +311,7 @@ class Note(object):
                 if not os.path.exists(candidate):
                     target_fname = candidate
                     # create the file, so it exists
-                    with open(target_fname, 'w') as f:
+                    with codecs.open(target_fname, 'w', 'utf-8') as f:
                         # create an empty note with this title. This
                         # will make this path the authoritative file
                         # for this note.
@@ -336,9 +341,9 @@ class Note(object):
         if self.local_path:
             msg_local_path = self.local_path
         if self.contents:
-            msg_contents = "" + str(len(self.contents))
+            msg_contents = "%d"%(len(self.contents))
         if self.file_contents:
-            msg_file_contents = "" + str(len(self.file_contents))
+            msg_file_contents = "%d"%(len(self.file_contents))
         return '%s - %s - %s - %s - %s' % (self.name, self.last_modified, msg_local_path, msg_contents, msg_file_contents)
 
     def hydrate_from_iphone(self):
@@ -346,7 +351,7 @@ class Note(object):
         Get the note from the iPhone
         """
         logging.debug(u'Getting note from device: %s' % (self.name, ))
-        self.contents = settings.iphone_request('get_note', {'title': self.name})
+        self.contents = settings.iphone_request('get_note', {'title': self.name.encode('utf-8')}).decode('utf-8')
         # HERE
         print self
         if self.contents is None:
@@ -375,7 +380,7 @@ class Note(object):
         self.local_path = self.local_path + '~'
         self.establish_local_path(MODE_FIND_OR_CREATE)
         logging.debug('Making back-up of note to local: %s' % (self.local_path, ))
-        with open(self.local_path, 'w') as f:
+        with codecs.open(self.local_path, 'w', 'utf-8') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
         utime = calendar.timegm(self.last_modified)
@@ -391,7 +396,7 @@ class Note(object):
         """
         self.establish_local_path(MODE_FIND_OR_CREATE)
         logging.debug('Saving note to local: %s' % (self.local_path, ))
-        with open(self.local_path, 'w') as f:
+        with codecs.open(self.local_path, 'w', 'utf-8') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
         utime = calendar.timegm(self.last_modified)
@@ -440,7 +445,7 @@ class Note(object):
         """
         self.establish_local_path(MODE_FIND_NOTE)
         logging.debug(u'Getting note from local: %s, %s' % (self.name, self.local_path))
-        with open(self.local_path, 'r') as f:
+        with codecs.open(self.local_path, 'r', 'utf-8') as f:
             self.contents = f.read()
         # Update the timestamp in the metadata
         new_contents = []
@@ -448,10 +453,10 @@ class Note(object):
         for line in self.contents.splitlines():
             if not substituted_timestamp and line.startswith('Timestamp: '):
                 # Substitute this line with the actual timestamp
-                line = 'Timestamp: %s' % (time.strftime('%Y-%m-%d %H:%M:%S +0000', self.last_modified), )
+                line = u'Timestamp: %s' % (time.strftime('%Y-%m-%d %H:%M:%S +0000', self.last_modified), )
                 substituted_timestamp = True
             new_contents.append(line + os.linesep)
-        self.contents = ''.join(new_contents)
+        self.contents = u''.join(new_contents)
 
     def save_to_iphone(self):
         """
@@ -464,8 +469,8 @@ class Note(object):
         # which does not contain the Title: metadata. filename
         # is used to generate the note title.
         # any returned file contents must always be utf-8 unicode
-        new_contents = settings.iphone_request('update_note', {'contents': self.contents,
-                                                               'filename': filename})
+        new_contents = settings.iphone_request('update_note', {'contents': self.contents.encode('utf-8'),
+                                                               'filename': filename}).decode('utf-8')
         # If this is a file, and the file exists locally then upload the file
         filename = ''
         if self.name.startswith('File:'):
@@ -485,7 +490,7 @@ class Note(object):
         Delete the note from the iPhone
         """
         logging.debug(u'Removing from device: %s' % (self.name, ))
-        settings.iphone_request('remove_note', {'title': self.name})
+        settings.iphone_request('remove_note', {'title': self.name.encode('utf-8')})
 
 
 class SyncSettings(object):
@@ -598,7 +603,7 @@ class SyncSettings(object):
         @return: Result of making request
         """
         # Read entire file into memory - not ideal...
-        file_contents = open(local_path, 'r').read()
+        file_contents = codecs.open(local_path, 'r', 'utf-8').read()
         boundary = '----------ThIs_Is_tHe_bouNdaRY_$'
         crlf = '\r\n'
         l = ['--' + boundary,
@@ -780,12 +785,12 @@ class TrunkSync(object):
 
         @return: List of Note instances
         """
-        raw_notes = settings.iphone_request('notes_list')
+        raw_notes = settings.iphone_request('notes_list').decode('utf-8')
         notes = []
         for note in raw_notes.splitlines():
             note = note.strip()
             if note:
-                timestamp, title = note.split(':', 1)
+                timestamp, title = note.split(u':', 1)
                 notes.append(Note(title, time.gmtime(int(timestamp))))
                 # DEBUG HERE
                 print timestamp + " - " + title
@@ -843,7 +848,7 @@ class TrunkSync(object):
         notes = []
         # Assuming not the first time synced with this directory
         if os.path.exists(settings.last_sync_path):
-            for line in open(settings.last_sync_path, 'r').readlines():
+            for line in codecs.open(settings.last_sync_path, 'r', 'utf-8').readlines():
                 line = line.strip()
                 if line:
                     timestamp, title = line.split(':', 1)
@@ -908,12 +913,12 @@ class TrunkSync(object):
             # stu 100912
             # Backup new_locally notes that have been overridden
             for note in analyser.overridden_locally:
-                note.hydrate_from_local(settings)
-                note.backup_to_local(settings)
+                note.hydrate_from_local()
+                note.backup_to_local()
             # Backup new_on_iphone notes that have been overridden
             for note in analyser.overridden_on_iphone:
-                note.hydrate_from_iphone(settings)
-                note.backup_to_local(settings)
+                note.hydrate_from_iphone()
+                note.backup_to_local()
             # Update local notes with notes from iPhone
             for note in analyser.new_on_iphone:
                 note.hydrate_from_iphone()
@@ -955,8 +960,8 @@ class TrunkSync(object):
             # Note we decode as utf-8 then re-encode in utf-8.
             # Alternatively we could just ensure we write
             # last_sync_file as binary, but that seems fragile.
-            raw_notes = settings.iphone_request('notes_list')
-            with open(settings.last_sync_path, 'w') as last_sync_file:
+            raw_notes = settings.iphone_request('notes_list').decode('utf-8')
+            with codecs.open(settings.last_sync_path, 'w', 'utf-8') as last_sync_file:
                 last_sync_file.write(raw_notes)
             # Update timestamps on those notes which were new locally
             # but were replaced with versions from the iPhone
