@@ -1148,16 +1148,15 @@ class TrunkSyncSimpleUi(TrunkSyncBaseUi):
 
     def confirm_instance(self, instances):
         chosen_n = 0
-        ## stu 110127 - switching to beta2 solution
-        # ## stu 100920
-        # n = 0
-        # assert len(instances) > 0, 'precondition of confirm_instance violated'
-        # for instance in instances:
-        #     n += 1
-        #     if (instance[1].strip() in DEFAULT_TRUNKS):
-        #         chosen_n = n
-        #         print 'Synching with Trunk instance: %d. %s' % (n, instance[1])
-        # ##
+        ## stu 110201 - ## stu 110127 - switching to beta2 solution ## stu 100920 -
+        n = 0
+        assert len(instances) > 0, 'precondition of confirm_instance violated'
+        for instance in instances:
+            n += 1
+            if (instance[1].strip() in DEFAULT_TRUNKS):
+                chosen_n = n
+                print 'Synching with Trunk instance: %d. %s' % (n, instance[1])
+        ##
         while not (chosen_n > 0 and chosen_n <= len(instances)):
             print 'Choose Trunk to sync with:'
             n = 0
