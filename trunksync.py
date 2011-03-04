@@ -359,12 +359,13 @@ class Note(object):
         filename = ''
         if self.name.startswith('File:'):
             filename = self.name[5:]
-        elif self.name.startswith('File'):
-            filename = self.name[4:]
+        #elif self.name.startswith('File'):
+        #    filename = self.name[4:]
         if filename:
             try:
                 # This note has a file component which we should get
-                self.file_contents = settings.iphone_get_file(filename)
+                #self.file_contents = settings.iphone_get_file(filename)
+                self.file_contents = settings.iphone_get_file(filename.encode('utf-8'))
             except e:
                 logging.warn('Device file not found: %s' % (filename, ))
                 print self
@@ -475,12 +476,13 @@ class Note(object):
         filename = ''
         if self.name.startswith('File:'):
             filename = self.name[5:]
-        elif self.name.startswith('File'):
-            filename = self.name[4:]
+        #elif self.name.startswith('File'):
+        #    filename = self.name[4:]
         if filename:
             file_path = os.path.join(settings.local_files_dir, filename)
             if os.path.exists(file_path):
-                settings.iphone_upload_file(filename, file_path)
+                #settings.iphone_upload_file(filename, file_path)
+                settings.iphone_upload_file(filename.encode('utf-8'), file_path)
             else:
                 logging.warn(u'File for entry does not exist: %s, %s' % (file_path, self.name))
         return new_contents
@@ -603,7 +605,8 @@ class SyncSettings(object):
         @return: Result of making request
         """
         # Read entire file into memory - not ideal...
-        file_contents = codecs.open(local_path, 'r', 'utf-8').read()
+        # file_contents = codecs.open(local_path, 'r', 'utf-8').read()
+        file_contents = open(local_path, 'r').read()
         boundary = '----------ThIs_Is_tHe_bouNdaRY_$'
         crlf = '\r\n'
         l = ['--' + boundary,
