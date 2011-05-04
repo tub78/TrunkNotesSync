@@ -138,7 +138,7 @@ DEFAULT_TRUNKS = ['Fly.local', 'Fly.local.']
 IGNORE_FILES = ['.lastsync', '.DS_Store', 'Notes & Settings', '.hgignore']
 IGNORE_DIRS = ['Pdf', 'pdf', 'Html', 'html', '.hg']
 
-
+IMAGE_EXTENSIONS  = ['jpg', 'jpeg', 'gif', 'png', 'tiff', 'bmp']
 
 VALID_FILENAME_CHARS = "-_.() %s%s" % (string.ascii_letters, string.digits)
 
@@ -350,7 +350,7 @@ class Note(object):
         """
         Get the note from the iPhone
         """
-        logging.debug(u'Getting note from device: %s' % (self.name, ))
+        logging.debug(u'<< Getting note from device: %s' % (self.name, ))
         self.contents = settings.iphone_request('get_note', {'title': self.name.encode('utf-8')}).decode('utf-8')
         # HERE
         print self
@@ -380,7 +380,7 @@ class Note(object):
         # Add tilde indicating backup
         self.local_path = self.local_path + '~'
         self.establish_local_path(MODE_FIND_OR_CREATE)
-        logging.debug('Making back-up of note to local: %s' % (self.local_path, ))
+        logging.debug('>> Making back-up of note to local: %s' % (self.local_path, ))
         with codecs.open(self.local_path, 'w', 'utf-8') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
@@ -396,7 +396,7 @@ class Note(object):
         Save the note to the local storage
         """
         self.establish_local_path(MODE_FIND_OR_CREATE)
-        logging.debug('Saving note to local: %s' % (self.local_path, ))
+        logging.debug('>> Saving note to local: %s' % (self.local_path, ))
         with codecs.open(self.local_path, 'w', 'utf-8') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
@@ -423,7 +423,7 @@ class Note(object):
         Delete the local file representing this note
         """
         self.establish_local_path(MODE_FIND_NOTE)
-        logging.debug(u'Deleting from local: %s, %s' % (self.name, self.local_path))
+        logging.debug(u'<< Deleting from local: %s, %s' % (self.name, self.local_path))
         try:
             os.remove(self.local_path)
             logging.debug(u'Removed: %s' % (self.local_path, ))
@@ -434,7 +434,7 @@ class Note(object):
                 # removed something, and a file exists without it.
                 try:
                     # Try removing without extension
-                    logging.debug(u'Deleting %s from local %s' % (self.name, stripped_path))
+                    logging.debug(u'<< Deleting %s from local: %s' % (self.name, stripped_path))
                     os.remove(stripped_path)
                     logging.debug(u'%s removed' % (stripped_path, ))
                 except:
@@ -445,7 +445,7 @@ class Note(object):
         Get the note from local
         """
         self.establish_local_path(MODE_FIND_NOTE)
-        logging.debug(u'Getting note from local: %s, %s' % (self.name, self.local_path))
+        logging.debug(u'<< Getting note from local: %s, %s' % (self.name, self.local_path))
         with codecs.open(self.local_path, 'r', 'utf-8') as f:
             self.contents = f.read()
         # Update the timestamp in the metadata
@@ -463,7 +463,7 @@ class Note(object):
         """
         Save the note to the iPhone
         """
-        logging.debug(u'Saving to device: %s' % (self.name, ))
+        logging.debug(u'>> Saving to device: %s' % (self.name, ))
         self.establish_local_path(MODE_CHECK_PRESENT)
         filename = os.path.basename(self.local_path)
         # filename is only used if this is a new local file
@@ -491,7 +491,7 @@ class Note(object):
         """
         Delete the note from the iPhone
         """
-        logging.debug(u'Removing from device: %s' % (self.name, ))
+        logging.debug(u'<< Deleting from device: %s' % (self.name, ))
         settings.iphone_request('remove_note', {'title': self.name.encode('utf-8')})
 
 
@@ -631,7 +631,7 @@ class SyncSettings(object):
 
 class SyncAnalyser(object):
     
-    def __init__(self, iphone_notes, local_notes, lastsync_notes, ui=None):
+    def __init__(self, iphone_notes, local_notes, local_file_notes, lastsync_notes, ui=None):
         """
         @param iphone_list: List of iPhone notes (note name and last modification date)
         @param local_list: List of local notes (note name and last modification date)
@@ -640,6 +640,7 @@ class SyncAnalyser(object):
         """
         self.iphone_notes = iphone_notes
         self.local_notes = local_notes
+        self.local_file_notes = local_file_notes
         self.lastsync_notes = lastsync_notes
         self.ui = ui
         # List of notes marked as
@@ -706,6 +707,20 @@ class SyncAnalyser(object):
                 i = self.lastsync_notes.index(note)
                 if note.last_modified > self.lastsync_notes[i].last_modified:
                     self.updated_locally.append(note)
+        # - for each ~file~ note locally:
+        #     * mark as NEW LOCALLY if,
+        #       * not in last sync list, and not already marked as NEW LOCALLY
+        #     * mark as UPDATED LOCALLY if,
+        #       * in last sync list AND last modification date > last sync list, and not already marked as UPDATED LOCALLY
+        for note in self.local_file_notes:
+            if not note in self.lastsync_notes:
+                if not note in self.new_locally:
+                    self.new_locally.append(note)
+            else:
+                i = self.lastsync_notes.index(note)
+                if note.last_modified > self.lastsync_notes[i].last_modified:
+                    if not note in self.updated_locally:
+                        self.updated_locally.append(note)
         # - for each note in last sync list:
         #     * mark as DELETED ON IPHONE if,
         #       * not in iPhone list
@@ -845,6 +860,45 @@ class TrunkSync(object):
                 notes[note_name] = Note(note_name, last_modified, local_path=note_path)
         return notes.values()
 
+    def get_notes_from_localfiles(self):
+        """
+        Get a list of notes corresponding to files (e.g. images, ...) from the local computer
+
+        @return: List of Note instances
+        Only consider image files (see IMAGE_EXTENSIONS global variable)
+        Exclude dot files
+        Exclude backup (~ tilde) files
+        Exclude IGNORE files
+        """
+        notes = {}
+        image_extensions_tuple = tuple(IMAGE_EXTENSIONS)
+        # For each file in the local files directory
+        for dirpath, dirnames, filenames in os.walk(settings.local_files_dir):
+            # stu 101121 - exclude directories
+            skip_dir = False
+            for dd in IGNORE_DIRS:
+                if "/"+dd in dirpath:
+                    skip_dir = True
+                    break
+            if skip_dir:
+                continue
+            for filename in filenames:
+                if filename.startswith('.') or filename.endswith('~') or filename in IGNORE_FILES:
+                    continue
+                lowercase_filename = filename.lower()
+                if not lowercase_filename.endswith(image_extensions_tuple):
+                    continue
+                file_path = os.path.join(dirpath, filename)
+                # For a local note the timestamp is just the files last modified date
+                last_modified = time.gmtime(os.stat(note_path).st_mtime)
+                # Construct note name and path
+                note_path = os.path.join(settings.local_dir, "File" + filename + ".txt")
+                # Note title is preferrably from the Title: metadata, if this does
+                # not exist then it will be the filename (minus the file extension)
+                note_name = "File:" + filename
+                notes[note_name] = Note(note_name, last_modified, local_path=note_path)
+        return notes.values()
+
     def get_notes_from_lastsync(self):
         """
         Get a list of notes as they were the last time sync happened
@@ -903,12 +957,14 @@ class TrunkSync(object):
         # Get lists of notes from the three sources
         iphone_notes = self.get_notes_from_iphone()
         local_notes = self.get_notes_from_local()
+        #local_file_notes = get_notes_from_localfiles()
+        local_file_notes = []
         lastsync_notes = self.get_notes_from_lastsync()
         # Tell the user that the sync is going to start
         if not self.ui.inform_sync_start():
             return False
         # Analyse the notes, and resolve conflicts (if synchronising)
-        analyser = SyncAnalyser(iphone_notes, local_notes, lastsync_notes, self.ui)
+        analyser = SyncAnalyser(iphone_notes, local_notes, local_file_notes, lastsync_notes, self.ui)
         if mode != 'sync' or analyser.analyse():
             if mode == 'backup':
                 # If backing up then new_on_iphone is all notes from the iPhone
