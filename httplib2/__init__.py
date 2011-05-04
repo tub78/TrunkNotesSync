@@ -1173,3 +1173,4 @@ class Response(dict):
             return self 
         else:  
             raise AttributeError, name 
+

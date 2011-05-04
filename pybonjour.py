@@ -2072,3 +2072,4 @@ class TXTRecord(object):
             data = data[length+1:]
 
         return txt
+
