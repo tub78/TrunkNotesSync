@@ -8,6 +8,10 @@ syntax: glob
 .DS_Store
 *.swp
 
+easygui.pyc
+httplib2/__init__.pyc
+httplib2/iri2uri.pyc
+pybonjour.pyc
 
 # switch to regexp syntax.
 syntax: regexp
