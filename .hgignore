@@ -12,6 +12,7 @@ easygui.pyc
 httplib2/__init__.pyc
 httplib2/iri2uri.pyc
 pybonjour.pyc
+Html
 
 # switch to regexp syntax.
 syntax: regexp
