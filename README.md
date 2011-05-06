@@ -17,7 +17,7 @@ device
 
 ## Changes
 
-<span style="color:red;background:grey">TODO</span>
+<div style="color:red;background:grey">TODO</div>
 
 Condense and provide usage instructions
 
