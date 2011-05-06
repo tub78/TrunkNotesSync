@@ -17,7 +17,7 @@ device
 
 ## Changes
 
-<span style="color:#F00;background-color:#555"> TODO </span>: Condense and provide usage instructions
+<span style="color:#F00;background-color:#555;font-weight:bold">TODO</span>: Condense and provide usage instructions
 
 Here is a rough list of changes that were made to the trunksync.
 
