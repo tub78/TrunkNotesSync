@@ -19,7 +19,7 @@ device
 
 Here is a rough list of changes that were made to the trunksync.
 
-TODO: Condense and provide usage instructions
+<span style="color:red;background:grey">TODO</span>: Condense and provide usage instructions
 
  1. Automatically select an iOS device that matches one of the names specified in the variable DEFAULT_TRUNKS.
  1. When generating the list of local files to transfer to/from the device, ignore all files from the list IGNORE_FILES
