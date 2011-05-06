@@ -17,8 +17,11 @@ device
 
 ## Changes
 
-<div style="color:red;background:grey">TODO
-</div>: Condense and provide usage instructions
+<div style="color:red;background-color:grey">
+TODO
+</div>
+
+Condense and provide usage instructions
 
 Here is a rough list of changes that were made to the trunksync.
 
