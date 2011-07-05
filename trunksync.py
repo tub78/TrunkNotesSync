@@ -93,7 +93,7 @@ all text within the notes (including the titles) is stored in UTF-8 format, and
 this is persisted across the computer(local) and device(remote) copies of the notes.
 However the filenames used to store notes on the local computer are restricted
 to ascii for portability purposes. Where multiple notes would map to a the same
-filename, a number is added prior to the .txt extension to distinguish the files.
+filename, a number is added prior to the .EXT extension to distinguish the files.
 The note associated with a file should never be assumed purely from the filename,
 but from the note title given in the first few lines of each local file note.
 
@@ -105,7 +105,7 @@ Linux:
   - libdnssd. Ubuntu package is 'libavahi-compat-libdnssd1'
 OS X:
   - no further requirements on OS x 10.6
-  
+
 NOTE:
 It is important that your iOS device and local computer(s) are all time-synched
 to a reasonable degree, otherwise repeated quick edit/syncs switching between
@@ -133,6 +133,9 @@ import pybonjour
 import httplib2
 # stu 100919 - need to fix my tk installation
 import easygui
+
+FILE_EXTENSION = 'md'
+FILE_EXTENSION = FILE_EXTENSION.lstrip('.')
 
 DEFAULT_TRUNKS = ['Fly.local', 'Fly.local.']
 IGNORE_FILES = ['.lastsync', '.DS_Store', 'Notes & Settings', '.hgignore']
@@ -184,13 +187,13 @@ class Note(object):
             assert os.path.exists(local_path), 'If local_path is provided it must exist'
         #if not local_path:
         #    local_path = unicodedata.normalize('NFKD', unicode(name)).encode('ASCII', 'ignore')
-        #    local_path = ''.join(c for c in local_path if c in VALID_FILENAME_CHARS) + '.txt'
+        #    local_path = ''.join(c for c in local_path if c in VALID_FILENAME_CHARS) + '.' + FILE_EXTENSION
         #    # ? NOT TRUE FOR : File:fragment-length-bias.png
         #    # assert os.path.exists(local_path), 'If local_path is provided it must exist: ' + local_path
         self.local_path = local_path
         self.contents = None       # note text content, utf8
         self.file_contents = None  # binary (str) content of image/sound
-    
+
     def _filename_base(self):
         """
         @return: proposed filename base, with no path info or extension.
@@ -262,7 +265,7 @@ class Note(object):
 
         # find and return an existing file if we can
         if mode in [MODE_FIND_NOTE, MODE_FIND_OR_CREATE]:
-            # see if a note matching f_base[.\d+]?.txt exists. If
+            # see if a note matching f_base[.\d+]?.EXT exists. If
             # such a note also contains the relevant title, select it.
             # If no such exists but a note of matching filename is
             # present, select that.
@@ -271,7 +274,7 @@ class Note(object):
             # backslash characters in paths on windows, so convert to
             # forward slashes for comparison. they still work equally
             # well for the FS operations.
-            fn_match_re = re.compile(r'%s(\.[0-9]+)?\.txt'%(f_base.replace('\\','/')))
+            fn_match_re = re.compile(r'%s(\.[0-9]+)?\.%s'%(f_base.replace('\\','/'), FILE_EXTENSION))
             for fn in os.listdir(settings.local_dir):
                 file_path = os.path.join(settings.local_dir, fn)
                 if (fn_match_re.match(file_path.replace('\\','/')) and
@@ -302,9 +305,9 @@ class Note(object):
             target_fname = f_base
             idx = 0
             while True:
-                # try to create f_base.txt, but if that exists
-                # try f_base.1.txt, f_base.2.txt, and so on.
-                candidate = u"%s%s.txt"%(target_fname, '' if not idx else '.%d'%idx)
+                # try to create f_base.EXT, but if that exists
+                # try f_base.1.EXT, f_base.2.EXT, and so on.
+                candidate = u"%s%s.%s"%(target_fname, '' if not idx else '.%d'%idx, FILE_EXTENSION)
                 # XXX: we could probably do some locked open-for-writing type thing
                 # to avoid the race-condition between os.path.exists and the file
                 # creation.  Mustn't truncate existing files though.
@@ -330,7 +333,7 @@ class Note(object):
         """
         # XXX: this could lead to loss of data if two notes on
         # the iphone have titles differing only in case...?
-        # perhaps should use the .1.txt type thing locally and
+        # perhaps should use the .1.EXT type thing locally and
         # preserve case distinctions.
         return cmp(self.name.lower(), other_note.name.lower())
 
@@ -344,13 +347,13 @@ class Note(object):
             msg_contents = "%d"%(len(self.contents))
         if self.file_contents:
             msg_file_contents = "%d"%(len(self.file_contents))
-        return '%s - %s - %s - %s - %s' % (self.name, self.last_modified, msg_local_path, msg_contents, msg_file_contents)
+        return '%s - %s - %s - %s - %s' % (time.asctime(self.last_modified), self.name, msg_local_path, msg_contents, msg_file_contents)
 
     def hydrate_from_iphone(self):
         """
         Get the note from the iPhone
         """
-        logging.debug(u'<< Getting note from device: %s' % (self.name, ))
+        logging.info(u'<< Getting note from device: %s' % (self.name, ))
         self.contents = settings.iphone_request('get_note', {'title': self.name.encode('utf-8')}).decode('utf-8')
         # HERE
         print self
@@ -380,7 +383,7 @@ class Note(object):
         # Add tilde indicating backup
         self.local_path = self.local_path + '~'
         self.establish_local_path(MODE_FIND_OR_CREATE)
-        logging.debug('>> Making back-up of note to local: %s' % (self.local_path, ))
+        logging.info('>> Making back-up of note to local: %s' % (self.local_path, ))
         with codecs.open(self.local_path, 'w', 'utf-8') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
@@ -396,7 +399,7 @@ class Note(object):
         Save the note to the local storage
         """
         self.establish_local_path(MODE_FIND_OR_CREATE)
-        logging.debug('>> Saving note to local: %s' % (self.local_path, ))
+        logging.info('>> Saving note to local: %s' % (self.local_path, ))
         with codecs.open(self.local_path, 'w', 'utf-8') as f:
             f.write(self.contents)
         # Update last modified time on file to this notes last accessed time
@@ -423,10 +426,10 @@ class Note(object):
         Delete the local file representing this note
         """
         self.establish_local_path(MODE_FIND_NOTE)
-        logging.debug(u'<< Deleting from local: %s, %s' % (self.name, self.local_path))
+        logging.info(u'<< Deleting from local: %s, %s' % (self.name, self.local_path))
         try:
             os.remove(self.local_path)
-            logging.debug(u'Removed: %s' % (self.local_path, ))
+            logging.info(u'Removed: %s' % (self.local_path, ))
         except OSError:
             stripped_path,ext = os.path.splitext(self.local_path)
             if ext and os.path.isfile(stripped_path):
@@ -434,9 +437,9 @@ class Note(object):
                 # removed something, and a file exists without it.
                 try:
                     # Try removing without extension
-                    logging.debug(u'<< Deleting %s from local: %s' % (self.name, stripped_path))
+                    logging.info(u'<< Deleting %s from local: %s' % (self.name, stripped_path))
                     os.remove(stripped_path)
-                    logging.debug(u'%s removed' % (stripped_path, ))
+                    logging.info(u'%s removed' % (stripped_path, ))
                 except:
                     pass
 
@@ -445,7 +448,7 @@ class Note(object):
         Get the note from local
         """
         self.establish_local_path(MODE_FIND_NOTE)
-        logging.debug(u'<< Getting note from local: %s, %s' % (self.name, self.local_path))
+        logging.info(u'<< Getting note from local: %s, %s' % (self.name, self.local_path))
         with codecs.open(self.local_path, 'r', 'utf-8') as f:
             self.contents = f.read()
         # Update the timestamp in the metadata
@@ -463,7 +466,7 @@ class Note(object):
         """
         Save the note to the iPhone
         """
-        logging.debug(u'>> Saving to device: %s' % (self.name, ))
+        logging.info(u'>> Saving to device: %s' % (self.name, ))
         self.establish_local_path(MODE_CHECK_PRESENT)
         filename = os.path.basename(self.local_path)
         # filename is only used if this is a new local file
@@ -491,7 +494,7 @@ class Note(object):
         """
         Delete the note from the iPhone
         """
-        logging.debug(u'<< Deleting from device: %s' % (self.name, ))
+        logging.info(u'<< Deleting from device: %s' % (self.name, ))
         settings.iphone_request('remove_note', {'title': self.name.encode('utf-8')})
 
 
@@ -508,6 +511,7 @@ class SyncSettings(object):
         iphone_user       [ None                              ] : Username (if required)  - see also options:credentials
         iphone_password   [ None                              ] : Corresponding username (plaintext)  - see also options:credentials
         quiet             [ options.quiet or False            ] : Verbosity
+        dryrun            [ options.dryrun or False           ] : Print changed files and quit
         iphone_ip         [ options.ipaddress                 ] : IP address of iPhone
         iphone_port       [ options.port                      ] : Port
         http              [ None                              ] : 
@@ -532,6 +536,7 @@ class SyncSettings(object):
             self.iphone_user, self.iphone_password = atoms
 
         self.quiet = options.quiet or False
+        self.dryrun = options.dryrun or False
         self.iphone_ip = options.ipaddress # will be None if not set
         self.iphone_port = options.port # will be None if not set
         self.http = None
@@ -630,7 +635,7 @@ class SyncSettings(object):
 
 
 class SyncAnalyser(object):
-    
+
     def __init__(self, iphone_notes, local_notes, local_file_notes, lastsync_notes, ui=None):
         """
         @param iphone_list: List of iPhone notes (note name and last modification date)
@@ -654,7 +659,7 @@ class SyncAnalyser(object):
         ## stu 110131 - DISABLED, enable get_internal_title()
         #self.overridden_on_iphone = []
         #self.overridden_locally = []
-        
+
     def analyse(self):
         """
         >>> iphone_notes = [Note('NoteTwo', 1), Note('NoteThree', 2), Note('NoteFour', 3), Note('NoteSix', 5)]
@@ -783,11 +788,36 @@ class SyncAnalyser(object):
         for note in self.updated_on_iphone:
             if note in self.deleted_locally:
                 self.deleted_locally.remove(note)
-        ### try:
-        ### except ValueError, e:
-        ###     print note
-        ###     print e
-        ###     raise
+        # try:
+        # except ValueError, e:
+        #     print note
+        #     print e
+        #     raise
+        if settings.dryrun:
+            # List of original notes
+            logging.debug("\n--------- iphone_notes")
+            logging.debug("\n".join(map(lambda x: str(x), self.iphone_notes)))
+            logging.debug("\n--------- local_notes")
+            logging.debug("\n".join(map(lambda x: str(x), self.local_notes)))
+            logging.debug("\n--------- local_file_notes")
+            logging.debug("\n".join(map(lambda x: str(x), self.local_file_notes)))
+            logging.debug("\n--------- lastsync_notes")
+            logging.debug("\n".join(map(lambda x: str(x), self.lastsync_notes)))
+            # List of notes marked as ...
+            logging.info("\n--------- new_on_iphone")
+            logging.info("\n".join(map(lambda x: str(x), self.new_on_iphone)))
+            logging.info("\n--------- updated_on_iphone")
+            logging.info("\n".join(map(lambda x: str(x), self.updated_on_iphone)))
+            logging.info("\n--------- new_locally")
+            logging.info("\n".join(map(lambda x: str(x), self.new_locally)))
+            logging.info("\n--------- updated_locally")
+            logging.info("\n".join(map(lambda x: str(x), self.updated_locally)))
+            logging.info("\n--------- deleted_on_iphone")
+            logging.info("\n".join(map(lambda x: str(x), self.deleted_on_iphone)))
+            logging.info("\n--------- deleted_locally")
+            logging.info("\n".join(map(lambda x: str(x), self.deleted_locally)))
+            return False
+
         return True
 
 class TrunkSync(object):
@@ -814,7 +844,7 @@ class TrunkSync(object):
                 timestamp, title = note.split(u':', 1)
                 notes.append(Note(title, time.gmtime(int(timestamp))))
                 # DEBUG HERE
-                print timestamp + " - " + title
+                logging.debug(u'%s - %s' % (timestamp, title))
         return notes
 
     def get_notes_from_local(self):
@@ -822,7 +852,7 @@ class TrunkSync(object):
         Get a list of notes from the local computer
 
         @return: List of Note instances
-        Only consider .txt files
+        Only consider .EXT files
         Exclude dot files
         Exclude backup (~ tilde) files
         Exclude IGNORE files
@@ -839,9 +869,9 @@ class TrunkSync(object):
             if skip_dir:
                 continue
             for filename in filenames:
-                if filename.startswith('.') or not filename.endswith('.txt') or filename.endswith('~') or filename in IGNORE_FILES:
+                if filename.startswith('.') or not filename.endswith('.' + FILE_EXTENSION) or filename.endswith('~') or filename in IGNORE_FILES:
                     continue
-                    # only consider .txt files
+                    # only consider .EXT files
                 note_path = os.path.join(dirpath, filename)
                 # For a local note the timestamp is just the files last modified date
                 last_modified = time.gmtime(os.stat(note_path).st_mtime)
@@ -892,7 +922,7 @@ class TrunkSync(object):
                 # For a local note the timestamp is just the files last modified date
                 last_modified = time.gmtime(os.stat(note_path).st_mtime)
                 # Construct note name and path
-                note_path = os.path.join(settings.local_dir, "File" + filename + ".txt")
+                note_path = os.path.join(settings.local_dir, "File" + filename + "." + FILE_EXTENSION)
                 # Note title is preferrably from the Title: metadata, if this does
                 # not exist then it will be the filename (minus the file extension)
                 note_name = "File:" + filename
@@ -1355,10 +1385,16 @@ def main(args=None):
         help="path of credentials file, containing username and password")
     parser.add_option("-m", "--mode", dest="sync_mode", choices=['sync', 'backup', 'restore', 'wipelocal'],
         help="sync mode, one of 'sync' [default], 'backup' (copy device->local), 'restore' (copy local->device), 'wipelocal' (remove all local sync info and data [CAUTION!])")
+    parser.add_option("-n", "--dry-run", dest="dryrun", action="store_true",
+        help="Print lists of changed files, and quit")
     if args is None:
         args = sys.argv[1:]
 
     options, args = parser.parse_args(args)
+
+    if options.quiet:
+        logging.disable(logging.DEBUG)
+
     if options.test:
         _test()
         sys.exit()
